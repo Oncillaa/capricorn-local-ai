@@ -4,7 +4,7 @@
 
 <p align="center">
   <img alt="Windows 10/11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0a0612?style=for-the-badge&logo=windows&logoColor=00f0ff">
-  <img alt="Python 3.11–3.14" src="https://img.shields.io/badge/Python-3.11--3.14-0a0612?style=for-the-badge&logo=python&logoColor=28ff96">
+  <img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-0a0612?style=for-the-badge&logo=python&logoColor=28ff96">
   <img alt="Local AI" src="https://img.shields.io/badge/AI-Local%20LM%20Studio-ff2260?style=for-the-badge&labelColor=0a0612">
   <img alt="Rust Planned" src="https://img.shields.io/badge/Core%20Rewrite-Rust%20Planned-00f0ff?style=for-the-badge&labelColor=0a0612">
   <img alt="Лицензия MIT" src="https://img.shields.io/badge/лицензия-MIT-ff2260?style=for-the-badge&labelColor=0a0612">
@@ -30,6 +30,7 @@
 | **Физика** | Капри можно брать мышкой, **кидать** (она отскакивает от краев экрана) и **гладить**. |
 | **Интеграции** | **Discord RPC** (статус, подсчет кликов) и **Spotify** (определение текущего трека). |
 | **Голос** | Потоковый синтез речи (Edge TTS/Silero) и распознавание (Vosk + Google). |
+| **Управление ПК** | Открытие программ, поиск в Google, управление окнами, громкостью и яркостью. |
 
 > **Работает и без ИИ** — все базовые команды доступны сразу после установки.
 
@@ -43,24 +44,30 @@
 Скачай **Python 3.12**: [установщик для Windows (64-bit)](https://www.python.org/ftp/python/3.12.8/python-3.12.8-amd64.exe).
 При установке **обязательно поставь галочку «Add python.exe to PATH»**.
 
-### 2. Установи зависимости
-Откройте терминал в папке с проектом и выполните две команды:
+### 2. Скачай проект
+Зелёная кнопка **Code → Download ZIP** вверху страницы. **Распакуй** архив в удобную папку (например, `Документы\capri`). Из архива запускать нельзя.
 
-pip install -r requirements.txt
+### 3. Запусти setup.bat
+Установит базовые библиотеки и распакует офлайн-модель распознавания речи. Дождись надписи «Готово».
+
+> Если Windows покажет «Windows защитила ваш компьютер» — **«Подробнее» → «Выполнить в любом случае»**.
+
+### 4. Установи дополнительные библиотеки
+Откройте терминал в папке с проектом и выполните:
 pip install chess pypresence pynput winrt-Windows.Media.Control
 
-### 3. Настрой локальный ИИ (LM Studio)
+### 5. Настрой локальный ИИ (LM Studio)
 1. Скачай и установи [LM Studio](https://lmstudio.ai/).
 2. Скачай любую модель (например, **Qwen2.5-3B-Instruct** для слабых ПК или **Qwen2.5-7B-Instruct** для мощных).
 3. Перейди во вкладку **Local Server** и нажми **Start Server** (порт должен быть `1234`).
 4. В файле `config.json` пропиши название вашей модели в строке `"local_model": "имя-модели"`.
 
-### 4. Запусти `run.bat`
+### 6. Запусти run.bat
 Капри появится и поздоровается. Кликни по ней правой кнопкой мыши, чтобы открыть радиальное меню.
 
 ---
 
-## 🛠️ Настройка (`config.json`)
+## 🛠️ Настройка (config.json)
 
 Все настройки хранятся в `config.json`. Вот основные из них:
 
@@ -71,6 +78,8 @@ pip install chess pypresence pynput winrt-Windows.Media.Control
 | `tts_engine` | Движок озвучки: `"edge"` (облачный, красивый) или `"silero"` (локальный, мгновенный). |
 | `voice_fx` | Сила цифровых эффектов голоса (`0` — чистый, `1.8` — сильный глитч). |
 | `wake_words` | Слова, на которые Капри откликается. |
+| `barge_in` | Можно ли перебивать Капри голосом (`true`/`false`). |
+| `chatter` | Появляется ли она сама время от времени (`true`/`false`). |
 
 ---
 
@@ -83,6 +92,7 @@ pip install chess pypresence pynput winrt-Windows.Media.Control
 *   `shop_dialog.py`, `levels_dialog.py` — Окна магазина и уровней.
 *   `chess_game.py` — Мини-игра шахматы.
 *   `discord_rpc.py` — Интеграция с Discord.
+*   `spotify_integration.py` — Отслеживание медиа-плеера.
 
 ---
 
@@ -93,6 +103,8 @@ pip install chess pypresence pynput winrt-Windows.Media.Control
 | **ИИ не отвечает** | Проверьте, запущен ли сервер в LM Studio и нажата ли кнопка «Start Server». Проверьте название модели в `config.json`. |
 | **Голос долго думает** | Поменяйте в `config.json` `"tts_engine": "silero"`. Это локальный синтезатор, он работает мгновенно. |
 | **Не видит Discord** | Убедитесь, что приложение Discord запущено. Проверьте `CLIENT_ID` в `discord_rpc.py`. |
+| **Ошибка PermissionError** | Удалите все файлы `capri_tts_*.wav` и `*.mp3` из папки `%TEMP%`. |
+| **Ошибка библиотек** | Убедитесь, что вы установили их именно для Python 3.12 (используйте `C:\Users\...\Python312\python.exe -m pip install ...`). |
 
 ---
 
