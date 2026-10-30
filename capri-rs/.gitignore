@@ -1,0 +1,13 @@
+# Сборка Rust
+/target/
+**/target/
+
+# Отладочные и служебные файлы
+*.pdb
+*.log
+screen.png
+avatar_crop.png
+
+# Настройки пользователя и прогресс — свои у каждого
+config.json
+save_data.json
