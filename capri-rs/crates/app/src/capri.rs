@@ -121,6 +121,8 @@ pub enum Job {
     HotkeyError(String),
     /// Положить текст в буфер обмена.
     CopyToClipboard(String),
+    /// Закрыть Капри совсем (меню в трее, кнопка в панели, выход из окна).
+    Quit,
     /// Озвучка закончилась (приходит из потока речи).
     SpeechDone {
         interrupted: bool,
@@ -199,10 +201,7 @@ impl Bridge {
                 return;
             }
             UiRequest::Call => Job::Call,
-            UiRequest::Quit => {
-                self.interrupt.store(true, Ordering::Relaxed);
-                Job::Say(String::new())
-            }
+            UiRequest::Quit => Job::Quit,
             UiRequest::SetMic(name) => Job::SetMic(name),
             UiRequest::MicNext => Job::MicNext,
             UiRequest::SetVolume(value) => Job::SetVolume(value),
@@ -481,6 +480,15 @@ impl Capri {
                     self.say(&text);
                 }
                 false
+            }
+            // «Закрыть» из меню и любое другое «выйти совсем». Раньше здесь
+            // отправлялся `Say("")`, то есть Капри просто пряталась: окно
+            // исчезало, а процесс оставался висеть в диспетчере задач, держа
+            // горячую клавишу и имя единственного экземпляра. Теперь выходим
+            // по-настоящему — цикл `run` завершится на `true`.
+            Job::Quit => {
+                log::info!("Просьба закрыть — выхожу");
+                true
             }
             Job::SpeechDone { interrupted } => {
                 self.finish_speech(interrupted);

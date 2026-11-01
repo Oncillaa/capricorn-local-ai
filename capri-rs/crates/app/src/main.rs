@@ -279,9 +279,14 @@ fn run(base_dir: PathBuf) -> i32 {
 
     // Ядро работает в своём потоке, окно — в главном: Windows требует,
     // чтобы окно жило именно в том потоке, который его создал.
+    // О завершении сообщает канал: так главный поток может подождать с
+    // пределом, а не навсегда.
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
         let mut capri = capri;
-        capri.run(jobs)
+        let code = capri.run(jobs);
+        let _ = done_tx.send(code);
+        code
     });
 
     let options = UiOptions {
@@ -294,13 +299,30 @@ fn run(base_dir: PathBuf) -> i32 {
 
     let code = capri_ui::run(options, Arc::clone(&cfg), events_rx, requests_tx);
 
+    // Окно закрылось — просим ядро закончить. Без этого просьба о выходе
+    // терялась: окно исчезало, а процесс оставался в диспетчере задач.
+    let _ = requests_for_panel.send(UiRequest::Quit);
+
     // Окно закрылось — гасим и цикл панелей, чтобы не держать поток.
     let _ = panels_quit.send(capri_panels::Command::Quit);
 
     // Окно закрылось — просим ядро закончить и не держим поток вечно.
     log::write_line("INFO", "Окно закрыто");
-    if worker.join().is_err() {
-        log::write_line("WARN", "Поток ядра завершился с ошибкой");
+    // Ждём, но не бесконечно: если ядро застряло в речи или в сети, всё равно
+    // выходим. Иначе процесс остаётся висеть в диспетчере задач и держит имя
+    // единственного экземпляра — следующий запуск молча ничего не делает.
+    match done_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        Ok(_) => {
+            if worker.join().is_err() {
+                log::write_line("WARN", "Поток ядра завершился с ошибкой");
+            }
+        }
+        Err(_) => {
+            log::write_line(
+                "WARN",
+                "Ядро не остановилось за пять секунд — выхожу принудительно",
+            );
+        }
     }
     code
 }
