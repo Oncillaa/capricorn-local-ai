@@ -444,6 +444,138 @@ fn plural(n: i64, one: &str, few: &str, many: &str) -> String {
     form.to_string()
 }
 
+// ---------------------------------------------------------------------------
+// Речь Капри вокруг напоминаний.
+//
+// Фразы живут здесь, рядом с разбором времени, а не в оболочке: так их
+// покрывают тесты без окна, микрофона и системных часов.
+// ---------------------------------------------------------------------------
+
+/// С чего начинается просьба о напоминании. Длинные варианты — первыми,
+/// иначе «поставь напоминание» срежется как «напоминание».
+const REQUEST_PREFIXES: [&str; 6] = [
+    "поставь напоминание",
+    "создай напоминание",
+    "напоминание",
+    "напомни-ка",
+    "напомни мне",
+    "напомни",
+];
+
+/// Служебные слова в начале просьбы: «напомни мне, пожалуйста, …».
+const FILLERS: [&str; 2] = ["мне", "пожалуйста"];
+
+/// Что человек просит напомнить — остаток фразы после «напомни».
+///
+/// `None` — это не просьба о напоминании (тогда фразу разбирает движок или
+/// нейросеть). Регистр сохраняется: в тексте могут быть имена.
+pub fn requested(command: &str) -> Option<String> {
+    let text = command.trim();
+    let low = text.to_lowercase();
+    let prefix = REQUEST_PREFIXES.iter().find(|p| low.starts_with(**p))?;
+    let skip = prefix.chars().count();
+    let rest: String = text.chars().skip(skip).collect();
+    Some(trim_fillers(&rest))
+}
+
+/// Убрать служебные слова по краям: «, мне, пожалуйста, …».
+fn trim_fillers(text: &str) -> String {
+    fn cut_edges(value: &str) -> String {
+        value
+            .trim()
+            .trim_matches(|c: char| matches!(c, ',' | ':' | '-' | '—' | '–'))
+            .trim()
+            .to_string()
+    }
+
+    let mut body = cut_edges(text);
+    loop {
+        let low = body.to_lowercase();
+        let found = FILLERS.iter().find(|word| {
+            match low.strip_prefix(**word) {
+                Some(rest) => match rest.chars().next() {
+                    None => true,
+                    Some(next) => next.is_whitespace() || next == ',' || next == ':',
+                },
+                None => false,
+            }
+        });
+        let Some(word) = found else { break };
+        let skip = word.chars().count();
+        let rest: String = body.chars().skip(skip).collect();
+        let next = cut_edges(&rest);
+        if next.is_empty() {
+            body = next;
+            break;
+        }
+        body = next;
+    }
+    body
+}
+
+/// Подтверждение сразу после просьбы: «Хорошо. Напомню через 10 минут: …».
+pub fn confirm(text: &str, due: i64, now: i64) -> String {
+    format!("Хорошо. Напомню {}: {}.", human_left(due, now), text.trim())
+}
+
+/// Время не назвали — спрашиваем.
+pub fn ask_when() -> &'static str {
+    "На когда напомнить? Скажи, например: «через десять минут»."
+}
+
+/// Время есть, а текста нет — спрашиваем.
+pub fn ask_what() -> &'static str {
+    "О чём напомнить?"
+}
+
+/// Объявление сработавших напоминаний одной фразой.
+///
+/// Несколько сразу — через «И ещё»: Капри произносит одно предложение, а не
+/// обрывает себя на середине вторым.
+pub fn announce(fired: &[Reminder]) -> String {
+    match fired.len() {
+        0 => String::new(),
+        1 => format!("Напоминаю: {}.", fired[0].text),
+        _ => {
+            let parts: Vec<&str> = fired.iter().map(|r| r.text.as_str()).collect();
+            format!("Напоминаю: {}.", parts.join(". И ещё: "))
+        }
+    }
+}
+
+/// Перечень ожидающих напоминаний.
+pub fn list(book: &Book, now: i64) -> String {
+    let pending = book.pending();
+    if pending.is_empty() {
+        return "Напоминаний нет.".to_string();
+    }
+    let parts: Vec<String> = pending
+        .iter()
+        .map(|r| format!("{} — {}", human_left(r.due, now), r.text))
+        .collect();
+    if parts.len() == 1 {
+        return format!("Напоминание одно: {}.", parts[0]);
+    }
+    format!("Напоминаний {}: {}.", parts.len(), parts.join("; "))
+}
+
+/// Ответ на отмену одного напоминания.
+pub fn cancelled(text: Option<&str>) -> String {
+    match text {
+        Some(what) => format!("Убрала: {what}."),
+        None => "Напоминаний и так нет.".to_string(),
+    }
+}
+
+/// Ответ на «отмени все».
+pub fn cancelled_all(count: usize) -> String {
+    match count {
+        0 => "Напоминаний и так нет.".to_string(),
+        1 => "Убрала одно напоминание.".to_string(),
+        many => format!("Убрала все напоминания, их было {many}."),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,5 +796,98 @@ mod tests {
         assert_eq!(timed.to_json(now).len(), 2);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- речь вокруг напоминаний -------------------------------------------
+
+    #[test]
+    fn request_is_cut_from_the_command() {
+        assert_eq!(
+            requested("напомни через 10 минут выпить воды").as_deref(),
+            Some("через 10 минут выпить воды")
+        );
+        assert_eq!(
+            requested("Напомни мне, пожалуйста, позвонить маме").as_deref(),
+            Some("позвонить маме")
+        );
+        assert_eq!(
+            requested("поставь напоминание в 18:30 купить хлеб").as_deref(),
+            Some("в 18:30 купить хлеб")
+        );
+        // Регистр в тексте сохраняется — там может быть имя.
+        assert_eq!(
+            requested("напомни через час позвонить Маше").as_deref(),
+            Some("через час позвонить Маше")
+        );
+    }
+
+    #[test]
+    fn other_commands_are_not_reminders() {
+        assert!(requested("переведи текст").is_none());
+        assert!(requested("открой настройки").is_none());
+        // Одно только «напомни» — просьба, но без текста: Капри переспросит.
+        assert_eq!(requested("напомни").as_deref(), Some(""));
+        assert!(requested("").is_none());
+    }
+
+    #[test]
+    fn request_leads_to_time_and_text() {
+        let now = at(2026, 5, 20, 10, 0);
+        let body = requested("напомни через 10 минут выпить воды").expect("просьба");
+        let (text, due) = parse_when(&body, now).expect("время");
+        assert_eq!(text, "выпить воды");
+        assert_eq!(due, now + 600);
+        assert_eq!(
+            confirm(&text, due, now),
+            "Хорошо. Напомню через 10 минут: выпить воды."
+        );
+    }
+
+    #[test]
+    fn announce_joins_several_at_once() {
+        let fired = vec![
+            Reminder { id: 1, text: "выпить воды".into(), due: 0, fired: true },
+            Reminder { id: 2, text: "позвонить маме".into(), due: 0, fired: true },
+        ];
+        assert_eq!(
+            announce(&fired[..1]),
+            "Напоминаю: выпить воды."
+        );
+        assert_eq!(
+            announce(&fired),
+            "Напоминаю: выпить воды. И ещё: позвонить маме."
+        );
+        assert_eq!(announce(&[]), "");
+    }
+
+    #[test]
+    fn list_speaks_about_pending() {
+        let now = at(2026, 5, 20, 10, 0);
+        let mut book = Book::new();
+        assert_eq!(list(&book, now), "Напоминаний нет.");
+
+        book.add("выпить воды", now + 300);
+        assert_eq!(list(&book, now), "Напоминание одно: через 5 минут — выпить воды.");
+
+        book.add("позвонить маме", now + 3600);
+        assert!(list(&book, now).starts_with("Напоминаний 2: через 5 минут — выпить воды;"));
+    }
+
+    #[test]
+    fn cancel_and_its_replies() {
+        assert_eq!(cancelled(None), "Напоминаний и так нет.");
+        assert_eq!(cancelled(Some("выпить воды")), "Убрала: выпить воды.");
+        assert_eq!(cancelled_all(0), "Напоминаний и так нет.");
+        assert_eq!(cancelled_all(1), "Убрала одно напоминание.");
+        assert_eq!(
+            cancelled_all(3),
+            "Убрала все напоминания, их было 3."
+        );
+    }
+
+    #[test]
+    fn questions_when_something_is_missing() {
+        assert!(ask_when().contains("На когда"));
+        assert!(ask_what().contains("О чём"));
     }
 }

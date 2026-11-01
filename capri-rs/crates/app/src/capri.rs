@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 use capri_core::engine::Engine;
 use capri_core::persona::{self, line};
+use capri_core::reminders::{self, Book, Store};
 use capri_core::save::SaveManager;
 use capri_core::{action, Config, Platform, Reply};
 use capri_ui::{UiEvent, UiRequest};
@@ -272,6 +273,9 @@ pub struct Capri {
     speech: Sender<String>,
     /// Слушать продолжение после этой фразы?
     follow_up_after_speech: bool,
+    /// Напоминания: книга в памяти и её файл рядом с `config.json`.
+    reminders: Book,
+    reminder_store: Store,
 }
 
 impl Capri {
@@ -324,6 +328,11 @@ impl Capri {
             });
         }
 
+        // Напоминания читаю сразу: если человек закрыл Капри с невыполненными,
+        // они должны ждать его и в следующий раз.
+        let reminder_store = Store::new(&deps.base_dir);
+        let reminders = reminder_store.load();
+
         let capri = Self {
             base_dir: deps.base_dir.clone(),
             cfg: Arc::clone(&deps.cfg),
@@ -348,6 +357,8 @@ impl Capri {
             panels: deps.panels.clone(),
             speech: speech_tx,
             follow_up_after_speech: false,
+            reminders,
+            reminder_store,
         };
         (capri, jobs_rx, bridge)
     }
@@ -428,6 +439,12 @@ impl Capri {
             if self.bridge.take_interrupt() && self.speaking {
                 self.speaker.stop();
                 log::info!("Капри перебили");
+            }
+
+            // Напоминания проверяем каждый тик. Свою речь не перебиваем:
+            // сработает сразу, как только Капри договорит.
+            if !self.speaking {
+                self.fire_reminders();
             }
 
             // Спрятаться, если давно тихо и говорить нечего.
@@ -1145,6 +1162,15 @@ impl Capri {
             command = stripped;
         }
 
+        // Напоминания — раньше движка и нейросети: это наши собственные часы
+        // и файл, и никакая модель не должна выдумывать за них время.
+        if let Some(reply) = self.try_reminder(&command) {
+            self.save.reward();
+            self.follow_up_after_speech = true;
+            self.say(&reply);
+            return;
+        }
+
         let mut reply = self.engine.handle(&command);
 
         // Награда за понятую команду.
@@ -1219,6 +1245,94 @@ impl Capri {
 
     fn engine_stop(&mut self) {
         self.engine.stop_background();
+    }
+
+    /// Понять просьбу про напоминания. `Some(фраза)` — ответ уже готов.
+    ///
+    /// Живёт в оболочке, а не в `Engine`: напоминанию нужны часы, файл и
+    /// книга, а движок разбора про диск и время ничего не знает. Сами фразы
+    /// собирает [`capri_core::reminders`] — их покрывают тесты.
+    fn try_reminder(&mut self, command: &str) -> Option<String> {
+        let low = command.to_lowercase();
+
+        // «какие напоминания», «список напоминаний».
+        let asks_for_list = low.contains("напоминан")
+            && (low.contains("какие")
+                || low.contains("список")
+                || low.contains("что там")
+                || low.contains("мои")
+                || low.contains("покажи"));
+        if asks_for_list {
+            return Some(reminders::list(&self.reminders, reminders::now_secs()));
+        }
+
+        // «отмени напоминание», «удали последнее напоминание», «убери все».
+        let asks_to_cancel = low.contains("напоминан")
+            && (low.contains("отмен") || low.contains("удали") || low.contains("убери"));
+        if asks_to_cancel {
+            let all = low.contains("все") || low.contains("всё");
+            if all {
+                let count = self.reminders.clear();
+                let _ = self.reminder_store.save(&self.reminders);
+                log::info!("Напоминания: убрала все ({count})");
+                return Some(reminders::cancelled_all(count));
+            }
+            let last = self
+                .reminders
+                .pending()
+                .last()
+                .map(|r| (r.id, r.text.clone()));
+            let reply = match last {
+                Some((id, text)) => {
+                    self.reminders.cancel(id);
+                    let _ = self.reminder_store.save(&self.reminders);
+                    log::info!("Напоминание убрано: {text}");
+                    reminders::cancelled(Some(&text))
+                }
+                None => reminders::cancelled(None),
+            };
+            return Some(reply);
+        }
+
+        // «напомни через 10 минут выпить воды».
+        let body = reminders::requested(command)?;
+        if body.trim().is_empty() {
+            return Some(reminders::ask_what().to_string());
+        }
+        let now = reminders::now_secs();
+        let Some((text, due)) = reminders::parse_when(&body, now) else {
+            // Время не назвали, но просьба явная — уточняем.
+            return Some(reminders::ask_when().to_string());
+        };
+        if text.trim().is_empty() {
+            return Some(reminders::ask_what().to_string());
+        }
+
+        let id = self.reminders.add(text.clone(), due);
+        let _ = self.reminder_store.save(&self.reminders);
+        log::info!(
+            "Напоминание #{id} на {}: {}",
+            reminders::human_left(due, now),
+            text
+        );
+        Some(reminders::confirm(&text, due, now))
+    }
+
+    /// Сказать всё, что уже наступило. Тик главного цикла.
+    fn fire_reminders(&mut self) {
+        let fired = self.reminders.take_fired(reminders::now_secs());
+        if fired.is_empty() {
+            return;
+        }
+        // Отмечаем сработавшими сразу: если озвучка упадёт, напоминание не
+        // повторится при следующем запуске до бесконечности.
+        let _ = self.reminder_store.save(&self.reminders);
+        for reminder in &fired {
+            log::info!("Напоминание сработало: {}", reminder.text);
+        }
+        self.summon();
+        let phrase = reminders::announce(&fired);
+        self.say(&phrase);
     }
 
     /// Предупредить, если сервер голоса не отвечает.
