@@ -153,6 +153,12 @@ pub enum UiRequest {
     HotkeyError(String),
     /// Положить текст в буфер обмена (кнопка «Отправить в main»).
     CopyToClipboard(String),
+    /// Поставить напоминание: тело просьбы («через 10 минут выпить воды»).
+    ReminderAdd(String),
+    /// Убрать одно напоминание по номеру.
+    ReminderCancel(u64),
+    /// Убрать все напоминания.
+    ReminderClear,
 }
 
 /// Что нужно окну от оболочки.

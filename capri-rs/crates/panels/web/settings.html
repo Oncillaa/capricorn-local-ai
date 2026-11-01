@@ -24,6 +24,7 @@
     <nav class="nav">
       <button class="nav-item is-active" data-section="settings"><span class="nav-ico">⚙</span>КАПРИ</button>
       <button class="nav-item" data-section="behavior"><span class="nav-ico">✳</span>ПОВЕДЕНИЕ</button>
+      <button class="nav-item" data-section="reminders"><span class="nav-ico">⏰</span>НАПОМИНАНИЯ</button>
       <button class="nav-item" data-section="shop"><span class="nav-ico">▤</span>МАГАЗИН</button>
       <button class="nav-item" data-section="agents"><span class="nav-ico">▣</span>АГЕНТЫ</button>
       <button class="nav-item" data-section="sound"><span class="nav-ico">◉</span>ЗВУК</button>
@@ -176,6 +177,31 @@
             <div class="stub">
               Всё в этом разделе меняется на лету и сразу пишется в
               <b>config.json</b> — перезапуск не нужен.
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="pane" data-pane="reminders">
+        <h2 class="pane-title">Напоминания <span class="phase">новое</span></h2>
+
+        <div class="cards">
+          <div class="card card-wide">
+            <h3>Что напомнить <small class="dim">голосом или отсюда</small></h3>
+            <p class="hint">
+              Время и дело — одной фразой: «через 10 минут выпить воды»,
+              «завтра в 9:00 позвонить маме». Голосом так же: «Капри, напомни через час …».
+            </p>
+            <div class="row row-stack">
+              <input id="reminder-text" type="text" placeholder="через 10 минут выпить воды" />
+              <button class="btn btn-accent" id="reminder-add">Напомнить</button>
+            </div>
+          </div>
+
+          <div class="card card-wide">
+            <h3>Ждут своего часа <small class="dim" id="reminder-count">—</small></h3>
+            <div id="reminder-list" class="reminder-list"></div>
+            <div class="row">
+              <button class="btn" id="reminder-clear">Убрать все</button>
             </div>
           </div>
         </div>

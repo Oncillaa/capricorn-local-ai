@@ -122,6 +122,12 @@ pub enum Job {
     HotkeyError(String),
     /// Положить текст в буфер обмена.
     CopyToClipboard(String),
+    /// Поставить напоминание из панели (тело просьбы без «напомни»).
+    ReminderAdd(String),
+    /// Убрать одно напоминание по номеру.
+    ReminderCancel(u64),
+    /// Убрать все напоминания.
+    ReminderClear,
     /// Закрыть Капри совсем (меню в трее, кнопка в панели, выход из окна).
     Quit,
     /// Озвучка закончилась (приходит из потока речи).
@@ -221,6 +227,9 @@ impl Bridge {
             UiRequest::RadialAction(id) => Job::RadialAction(id),
             UiRequest::HotkeyError(why) => Job::HotkeyError(why),
             UiRequest::CopyToClipboard(text) => Job::CopyToClipboard(text),
+            UiRequest::ReminderAdd(body) => Job::ReminderAdd(body),
+            UiRequest::ReminderCancel(id) => Job::ReminderCancel(id),
+            UiRequest::ReminderClear => Job::ReminderClear,
         };
         let _ = self.jobs.send(job);
     }
@@ -503,6 +512,56 @@ impl Capri {
             // исчезало, а процесс оставался висеть в диспетчере задач, держа
             // горячую клавишу и имя единственного экземпляра. Теперь выходим
             // по-настоящему — цикл `run` завершится на `true`.
+            // Напоминания из панели настроек: тело просьбы приходит без
+            // «напомни», разбор времени и фразы — те же, что у голоса.
+            Job::ReminderAdd(body) => {
+                self.summon();
+                let now = reminders::now_secs();
+                match reminders::parse_when(&body, now) {
+                    Some((what, due)) if !what.trim().is_empty() => {
+                        let id = self.reminders.add(what.clone(), due);
+                        let _ = self.reminder_store.save(&self.reminders);
+                        log::info!(
+                            "Напоминание #{id} из панели на {}: {}",
+                            reminders::human_left(due, now),
+                            what
+                        );
+                        self.say(&reminders::confirm(&what, due, now));
+                    }
+                    _ => {
+                        log::info!("Панель прислала напоминание без времени: {body}");
+                        self.say(reminders::ask_when());
+                    }
+                }
+                false
+            }
+            Job::ReminderCancel(id) => {
+                let text = self
+                    .reminders
+                    .pending()
+                    .iter()
+                    .find(|r| r.id == id)
+                    .map(|r| r.text.clone());
+                match text {
+                    Some(text) => {
+                        self.reminders.cancel(id);
+                        let _ = self.reminder_store.save(&self.reminders);
+                        log::info!("Напоминание #{id} убрано из панели: {text}");
+                        self.summon();
+                        self.say(&reminders::cancelled(Some(&text)));
+                    }
+                    None => log::info!("Напоминание #{id} уже не ждёт своего часа"),
+                }
+                false
+            }
+            Job::ReminderClear => {
+                let count = self.reminders.clear();
+                let _ = self.reminder_store.save(&self.reminders);
+                log::info!("Все напоминания убраны из панели: {count}");
+                self.summon();
+                self.say(&reminders::cancelled_all(count));
+                false
+            }
             Job::Quit => {
                 log::info!("Просьба закрыть — выхожу");
                 true

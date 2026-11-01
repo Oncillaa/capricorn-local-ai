@@ -415,6 +415,44 @@ input[type="range"]:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 .skin-row .btn { flex: none; min-width: 96px; padding: 6px 10px; font-size: 11px; }
 
+/* Напоминания: поле ввода и список ожидающих. */
+#reminder-text {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 11px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  outline: none;
+}
+#reminder-text:focus { border-color: var(--green); box-shadow: 0 0 12px rgba(40, 255, 150, 0.2); }
+#reminder-text::placeholder { color: var(--muted); }
+.row-stack #reminder-add { padding: 9px 14px; }
+
+.reminder-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.reminder-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.reminder-when {
+  flex: none;
+  min-width: 104px;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--green);
+  white-space: nowrap;
+}
+.reminder-what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.reminder-row .btn { flex: none; padding: 6px 10px; font-size: 11px; }
+
 .phase {
   display: inline-block;
   font-family: "Consolas", monospace;

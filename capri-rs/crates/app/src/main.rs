@@ -1780,6 +1780,29 @@ fn panel_dispatch(
             "chat-send" | "chat-ready" | "chat-clear" => {
                 chat_action(&event.action, &event.data, cfg, base_dir, panels);
             }
+            // Напоминания: книга живёт в ядре, поэтому панель просит ядро,
+            // а снимок для показа читается из файла. Страница после нажатия
+            // сама переспросит состояние.
+            "reminder-add" => {
+                let text = event
+                    .data
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if !text.is_empty() {
+                    let _ = requests.send(UiRequest::ReminderAdd(text));
+                }
+            }
+            "reminder-cancel" => {
+                if let Some(id) = event.data.get("id").and_then(|v| v.as_u64()) {
+                    let _ = requests.send(UiRequest::ReminderCancel(id));
+                }
+            }
+            "reminder-clear" => {
+                let _ = requests.send(UiRequest::ReminderClear);
+            }
             // Терминал: вывод идёт построчно, поэтому тоже мимо общего снимка.
             "terminal-run" | "terminal-cancel" => {
                 terminal_action(&event.action, &event.data, panels);
@@ -2033,6 +2056,7 @@ fn panel_state(cfg: &Arc<RwLock<Config>>, base_dir: &PathBuf, monitors: &[Monito
         "save_path": base_dir.join("save_data.json").to_string_lossy(),
         "monitors": monitor_list,
         "save": save_snapshot(base_dir),
+        "reminders": reminders_snapshot(base_dir),
         "config": {
             "enable_ai": config.enable_ai,
             "local_ai": config.local_ai,
@@ -2094,6 +2118,19 @@ fn refresh_panel(
     let state = panel_state(cfg, base_dir, monitors);
     let js = format!("window.capri.setState({state});");
     let _ = panels.send(capri_panels::Command::Eval(*panel, js));
+}
+
+/// Напоминания для панели настроек.
+///
+/// Читаем файл, а не книгу ядра: панель — вещь интерфейса, и ей не нужно
+/// ждать ядро. Файл пишет только ядро, поэтому он всегда честный.
+fn reminders_snapshot(base_dir: &PathBuf) -> serde_json::Value {
+    let book = capri_core::reminders::Store::new(base_dir).load();
+    let now = capri_core::reminders::now_secs();
+    serde_json::json!({
+        "items": book.to_json(now),
+        "count": book.pending().len(),
+    })
 }
 
 /// Прогресс для панелей «Магазин» и «Уровни».

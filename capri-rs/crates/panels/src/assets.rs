@@ -152,6 +152,36 @@ mod tests {
 
 
     #[test]
+    fn reminders_pane_is_real() {
+        // Раздел напоминаний обязан быть настоящим: поле, список и кнопки.
+        // Иначе человек ставит напоминание только голосом — а проверить,
+        // что оно записалось, ему негде.
+        let page = get("settings.html").expect("страница настроек должна быть");
+        let html = std::str::from_utf8(page.bytes).unwrap_or_default();
+        assert!(
+            !html.contains(r#"data-pane="reminders" data-stub"#),
+            "раздел напоминаний снова стал заглушкой"
+        );
+        for id in ["reminder-text", "reminder-add", "reminder-list", "reminder-clear"] {
+            assert!(
+                html.contains(&format!(r#"id="{id}""#)),
+                "в разделе напоминаний нет элемента «{id}»"
+            );
+        }
+        assert!(
+            html.contains(r#"data-section="reminders""#),
+            "нет кнопки меню для напоминаний"
+        );
+
+        // Страница уходит теми же действиями, что разбирает main.rs.
+        let script = get("app.js").expect("общий скрипт должен быть");
+        let js = std::str::from_utf8(script.bytes).unwrap_or_default();
+        for action in ["reminder-add", "reminder-cancel", "reminder-clear", "showReminders"] {
+            assert!(js.contains(action), "скрипт не знает про «{action}»");
+        }
+    }
+
+    #[test]
     fn translate_settings_are_a_real_pane() {
         // Раздел «Перевод» в настройках был заглушкой (`data-stub`). Теперь у
         // него своя разметка — иначе провайдера негде было бы выбрать.

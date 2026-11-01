@@ -306,6 +306,46 @@ function showShop(state) {
     .join('');
 }
 
+/** Напоминания: что ждёт своего часа и когда. */
+function showReminders(state) {
+  const box = document.getElementById('reminder-list');
+  if (!box) return;
+  const all = (state && state.reminders && state.reminders.items) || [];
+  const waiting = all.filter((item) => !item.fired);
+
+  const count = document.getElementById('reminder-count');
+  if (count) {
+    count.textContent = waiting.length
+      ? `${waiting.length} ${plural(waiting.length, 'штука', 'штуки', 'штук')}`
+      : 'пусто';
+  }
+
+  if (!waiting.length) {
+    box.innerHTML = '<p class="hint">Пока ничего. Напиши выше — или просто попроси голосом.</p>';
+    return;
+  }
+
+  box.innerHTML = waiting
+    .map(
+      (item) => `<div class="reminder-row">
+        <span class="reminder-when">${escapeHtml(item.left || '')}</span>
+        <span class="reminder-what">${escapeHtml(item.text || '')}</span>
+        <button class="btn" data-reminder="${item.id}">Убрать</button>
+      </div>`,
+    )
+    .join('');
+}
+
+/** Форма слова по числу — чтобы «1 штука», «2 штуки», «5 штук». */
+function plural(count, one, few, many) {
+  const tail = count % 100;
+  if (tail >= 11 && tail <= 14) return many;
+  const last = count % 10;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
+}
+
 /** Список мониторов: сколько их, такой и список. */
 function showMonitors(monitors, current) {
   const select = document.getElementById('monitor');
@@ -358,6 +398,7 @@ function paint() {
   showVoice(config);
   showSound(config);
   showShop(state);
+  showReminders(state);
 
   const facts = document.getElementById('facts');
   if (facts) {
@@ -455,6 +496,7 @@ function wire() {
   wireVoice();
   wireSound();
   wireShop();
+  wireReminders();
 
   // Esc закрывает панель — как у любого нормального окна настроек.
   window.addEventListener('keydown', (event) => {
@@ -661,6 +703,60 @@ function wireShop() {
     // обновятся сами, без перезагрузки страницы.
     setTimeout(() => capri.post('ready'), 400);
   });
+}
+
+/**
+ * Раздел «Напоминания»: поставить, убрать одно, убрать все.
+ *
+ * Книга напоминаний живёт в ядре, поэтому страница не правит файл сама —
+ * она просит ядро и через мгновение переспрашивает состояние. Так список
+ * показывает то же, что Капри реально скажет.
+ */
+function wireReminders() {
+  const add = document.getElementById('reminder-add');
+  const input = document.getElementById('reminder-text');
+  if (add && input) {
+    const send = () => {
+      const text = input.value.trim();
+      if (!text) {
+        capri.status('напиши, о чём напомнить');
+        input.focus();
+        return;
+      }
+      capri.post('reminder-add', { text });
+      capri.status('напоминание поставлено');
+      input.value = '';
+      setTimeout(() => capri.post('ready'), 500);
+    };
+    add.addEventListener('click', send);
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        send();
+      }
+    });
+  }
+
+  const list = document.getElementById('reminder-list');
+  if (list) {
+    list.addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-reminder]');
+      if (!btn) return;
+      capri.post('reminder-cancel', { id: Number(btn.dataset.reminder) });
+      btn.disabled = true;
+      btn.textContent = 'Убираю…';
+      setTimeout(() => capri.post('ready'), 500);
+    });
+  }
+
+  const clear = document.getElementById('reminder-clear');
+  if (clear) {
+    clear.addEventListener('click', () => {
+      capri.post('reminder-clear');
+      capri.status('убираю все напоминания');
+      setTimeout(() => capri.post('ready'), 500);
+    });
+  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
