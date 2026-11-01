@@ -114,6 +114,44 @@ mod tests {
     }
 
     #[test]
+    fn voice_sound_and_shop_are_real_panes() {
+        // Три раздела были заглушками: человек открывал их и читал «Фаза 2».
+        // Настраивать голос, звук и скины было негде.
+        let page = get("settings.html").expect("страница настроек должна быть");
+        let html = std::str::from_utf8(page.bytes).unwrap_or_default();
+        let panes: [(&str, &[&str]); 3] = [
+            ("voice", &["tts-engine", "voice-name", "voice-lively"]),
+            ("sound", &["voice-volume", "voice-rate", "voice-pitch", "voice-test"]),
+            ("shop", &["shop-money", "shop-level", "shop-skins"]),
+        ];
+        for (pane, ids) in panes {
+            assert!(
+                !html.contains(&format!(r#"data-pane="{pane}" data-stub"#)),
+                "раздел «{pane}» снова стал заглушкой"
+            );
+            assert!(html.contains(&format!(r#"data-pane="{pane}""#)), "нет раздела «{pane}»");
+            for id in ids {
+                assert!(
+                    html.contains(&format!(r#"id="{id}""#)),
+                    "в разделе «{pane}» нет элемента «{id}»"
+                );
+            }
+        }
+
+        // И страница должна уметь с этим работать, а не просто показать.
+        let script = get("app.js").expect("общий скрипт должен быть");
+        let js = std::str::from_utf8(script.bytes).unwrap_or_default();
+        for key in ["tts-engine", "voice-volume", "voice-rate", "voice-pitch", "shop-skins"] {
+            assert!(js.contains(key), "скрипт не знает про «{key}»");
+        }
+        // Пробная фраза и покупка уходят ядру теми же ключами, что ждёт main.rs.
+        assert!(js.contains("voice-test"), "скрипт не умеет проверять голос");
+        assert!(js.contains("shop-buy"), "скрипт не умеет покупать скин");
+        assert!(js.contains("shop-equip"), "скрипт не умеет надевать скин");
+    }
+
+
+    #[test]
     fn translate_settings_are_a_real_pane() {
         // Раздел «Перевод» в настройках был заглушкой (`data-stub`). Теперь у
         // него своя разметка — иначе провайдера негде было бы выбрать.

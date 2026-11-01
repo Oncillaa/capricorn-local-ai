@@ -269,6 +269,34 @@ impl Default for Config {
 pub const SCALE_MIN: u8 = 1;
 pub const SCALE_MAX: u8 = 100;
 
+/// Границы ползунков «Скорость» и «Тон» речи, в процентах.
+pub const SPEECH_MIN: i32 = -50;
+pub const SPEECH_MAX: i32 = 50;
+
+/// Разобрать скорость речи из конфига: `"+10%"` → `10`, `"-20 %"` → `-20`.
+///
+/// В конфиге это строка, потому что так её понимает Edge TTS. Ползунку нужно
+/// число, а человеку — «обычно» вместо «+0%», поэтому разбор и сборка живут
+/// рядом и покрыты тестами.
+pub fn speech_percent(text: &str) -> i32 {
+    let cleaned: String = text
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '-' || *c == '+')
+        .collect();
+    let value: i32 = cleaned.parse().unwrap_or(0);
+    value.clamp(SPEECH_MIN, SPEECH_MAX)
+}
+
+/// Собрать строку для конфига из числа: `10` → `"+10%"`, `0` → `"+0%"`.
+pub fn speech_string(percent: i32) -> String {
+    let value = percent.clamp(SPEECH_MIN, SPEECH_MAX);
+    if value >= 0 {
+        format!("+{value}%")
+    } else {
+        format!("{value}%")
+    }
+}
+
 /// Горячая клавиша меню по умолчанию. `Ctrl+Alt` — потому что эта пара
 /// почти нигде не занята, в отличие от `Ctrl+Shift` (её перехватывают
 /// браузеры и мессенджеры) и `Alt+Tab`-подобных сочетаний.
@@ -656,6 +684,23 @@ fn merge_into_defaults(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speech_speed_survives_the_round_trip() {
+        // Что положили в конфиг, то и прочитали обратно.
+        for percent in [-50, -20, -1, 0, 5, 50] {
+            assert_eq!(speech_percent(&speech_string(percent)), percent);
+        }
+        // Строки из старых конфигов и с пробелами тоже понимаем.
+        assert_eq!(speech_percent("+10%"), 10);
+        assert_eq!(speech_percent("-20 %"), -20);
+        assert_eq!(speech_percent(""), 0);
+        assert_eq!(speech_percent("ерунда"), 0);
+        // За границами — подрезаем, а не отдаём синтезатору невозможное.
+        assert_eq!(speech_percent("+900%"), SPEECH_MAX);
+        assert_eq!(speech_string(-900), "-50%");
+        assert_eq!(speech_string(0), "+0%");
+    }
 
     #[test]
     fn chatter_interval_is_always_sane() {

@@ -66,6 +66,24 @@ pub enum BehaviorSetting {
     TranslateTo(String),
     /// Адрес LibreTranslate (`translate_libretranslate_url`); пусто — не использовать.
     TranslateUrl(String),
+
+    // --- раздел «Голос» ---
+    /// Чем говорить (`tts_engine`): `edge`, `sapi` или `silero`.
+    TtsEngine(String),
+    /// Каким голосом (`voice`), например `ru-RU-SvetlanaNeural`.
+    VoiceName(String),
+    /// Живая интонация (`voice_lively`).
+    VoiceLively(bool),
+
+    // --- раздел «Звук» ---
+    /// Громкость голоса 0…100 (`voice_volume`).
+    VoiceVolume(u8),
+    /// Скорость речи в процентах, −50…+50 (`voice_rate`).
+    VoiceRate(i32),
+    /// Тон речи в процентах, −50…+50 (`voice_pitch`).
+    VoicePitch(i32),
+    /// Проверить голос прямо из настроек: сказать пробную фразу.
+    VoiceTest,
 }
 
 /// Что ядро говорит окну аватара.

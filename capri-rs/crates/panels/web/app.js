@@ -192,6 +192,120 @@ function showTranslate(config) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Голос, звук и магазин.
+// ---------------------------------------------------------------------------
+
+const ENGINE_NOTES = {
+  edge: 'живые голоса из сети',
+  sapi: 'встроенный в Windows, офлайн',
+  silero: 'офлайн-модель',
+};
+
+/** Нарисовать список голосов. Без состояния рисуем заглушку, а не пустоту. */
+function renderVoiceList(config) {
+  const box = document.getElementById('voice-name');
+  if (!box) return;
+  const voices = Array.isArray(config && config.voices) ? config.voices : [];
+  if (!voices.length) {
+    box.innerHTML = '<span class="dim">список придёт от ядра</span>';
+    return;
+  }
+  const current = (config && config.voice) || '';
+  box.innerHTML = voices
+    .map((voice) => {
+      const on = voice.id === current ? ' is-on' : '';
+      return `<button class="btn${on}" data-voice="${escapeHtml(voice.id)}" title="${escapeHtml(voice.id)}">${escapeHtml(voice.note || voice.id)}</button>`;
+    })
+    .join('');
+}
+
+/** Раздел «Голос»: движок, голос, живая интонация. */
+function showVoice(config) {
+  const engine = config.tts_engine || 'edge';
+  document.querySelectorAll('#tts-engine .btn').forEach((btn) => {
+    btn.classList.toggle('is-on', btn.dataset.engine === engine);
+  });
+  renderVoiceList(config);
+  showFlag('voice-lively', config.voice_lively);
+}
+
+/** Подпись ползунка речи: «обычно» вместо «+0%» — понятнее без объяснений. */
+function speechLabel(percent) {
+  const value = Number(percent) || 0;
+  if (value === 0) return 'обычно';
+  return (value > 0 ? '+' : '') + value + ' %';
+}
+
+/** Раздел «Звук»: громкость, скорость, тон. */
+function showSound(config) {
+  const volume = document.getElementById('voice-volume');
+  if (volume && document.activeElement !== volume) {
+    volume.value = config.voice_volume != null ? config.voice_volume : 100;
+  }
+  const volumeValue = document.getElementById('voice-volume-value');
+  if (volumeValue) {
+    volumeValue.textContent =
+      (config.voice_volume != null ? config.voice_volume : 100) + ' %';
+  }
+
+  const rate = document.getElementById('voice-rate');
+  if (rate && document.activeElement !== rate) {
+    rate.value = config.voice_rate || 0;
+  }
+  const rateValue = document.getElementById('voice-rate-value');
+  if (rateValue) rateValue.textContent = speechLabel(config.voice_rate || 0);
+
+  const pitch = document.getElementById('voice-pitch');
+  if (pitch && document.activeElement !== pitch) {
+    pitch.value = config.voice_pitch || 0;
+  }
+  const pitchValue = document.getElementById('voice-pitch-value');
+  if (pitchValue) pitchValue.textContent = speechLabel(config.voice_pitch || 0);
+}
+
+/** Раздел «Магазин»: кошелёк и скины с кнопками. */
+function showShop(state) {
+  const save = (state && state.save) || {};
+  const money = document.getElementById('shop-money');
+  if (money) money.textContent = (save.money != null ? save.money : 0) + ' ECS';
+
+  const level = document.getElementById('shop-level');
+  if (level) {
+    const xp = save.xp != null ? save.xp : 0;
+    const next = save.xp_to_next != null ? save.xp_to_next : 0;
+    level.textContent = `${save.level != null ? save.level : 1} · ${xp}/${next} XP`;
+  }
+
+  const box = document.getElementById('shop-skins');
+  if (!box) return;
+  const skins = Array.isArray(save.skins) ? save.skins : [];
+  const owned = Array.isArray(save.owned_skins) ? save.owned_skins : [];
+  const equipped = save.equipped_skin || '';
+  box.innerHTML = skins
+    .map((skin) => {
+      const isOwned = skin.id === 'purple' || owned.includes(skin.id);
+      const isOn = skin.id === equipped;
+      const swatch = skin.color || '#8b5cf6';
+      let button;
+      if (isOn) {
+        button = '<button class="btn" disabled>Надет</button>';
+      } else if (isOwned) {
+        button = `<button class="btn btn-accent" data-shop="equip" data-skin="${escapeHtml(skin.id)}">Надеть</button>`;
+      } else {
+        const poor = (save.money || 0) < skin.price;
+        button = `<button class="btn${poor ? '' : ' btn-accent'}" data-shop="buy" data-skin="${escapeHtml(skin.id)}"${poor ? ' disabled' : ''}>${poor ? 'не хватает' : 'Купить'}</button>`;
+      }
+      return `<div class="skin-row${isOn ? ' is-on' : ''}">
+        <span class="skin-dot" style="background:${swatch}"></span>
+        <span class="skin-text"><b>${escapeHtml(skin.name)}</b><small>${escapeHtml(skin.note || '')}</small></span>
+        <span class="skin-price">${skin.price > 0 ? skin.price + ' ECS' : 'бесплатно'}</span>
+        ${button}
+      </div>`;
+    })
+    .join('');
+}
+
 /** Список мониторов: сколько их, такой и список. */
 function showMonitors(monitors, current) {
   const select = document.getElementById('monitor');
@@ -241,6 +355,9 @@ function paint() {
   showMinutes('chatter-max', config.chatter_max_minutes, 'мин');
   showPercent('roam', config.roam_percent);
   showTranslate(config);
+  showVoice(config);
+  showSound(config);
+  showShop(state);
 
   const facts = document.getElementById('facts');
   if (facts) {
@@ -335,6 +452,9 @@ function wire() {
 
   wireBehavior();
   wireTranslate();
+  wireVoice();
+  wireSound();
+  wireShop();
 
   // Esc закрывает панель — как у любого нормального окна настроек.
   window.addEventListener('keydown', (event) => {
@@ -354,6 +474,7 @@ function wireBehavior() {
     'barge-in': 'перебивание',
     'greet-on-start': 'приветствие',
     'search-when-unsure': 'поиск в сети',
+    'voice-lively': 'живая интонация',
   };
   Object.keys(FLAGS).forEach((id) => {
     document.querySelectorAll(`#${id} .btn`).forEach((btn) => {
@@ -445,6 +566,101 @@ function wireTranslate() {
       delete url.dataset.dirty;
     });
   }
+}
+
+/**
+ * Раздел «Голос»: движок, голос из списка, живая интонация.
+ *
+ * Список голосов рисуется из состояния — он приходит от ядра вместе с
+ * названиями и описаниями, дублировать его на странице нельзя: разъедется.
+ */
+function wireVoice() {
+  const engine = document.getElementById('tts-engine');
+  if (engine) {
+    engine.addEventListener('click', (event) => {
+      const btn = event.target.closest('.btn');
+      if (!btn || !btn.dataset.engine) return;
+      engine.querySelectorAll('.btn').forEach((other) => other.classList.remove('is-on'));
+      btn.classList.add('is-on');
+      capri.post('set-behavior', { key: 'tts-engine', value: btn.dataset.engine });
+      capri.status('голос: ' + (ENGINE_NOTES[btn.dataset.engine] || btn.dataset.engine));
+    });
+  }
+
+  // Кнопки голосов перерисовываются вместе с состоянием, поэтому слушаем
+  // контейнер, а не сами кнопки: иначе после первой же перерисовки клики
+  // перестали бы работать.
+  const voices = document.getElementById('voice-name');
+  if (voices) {
+    voices.addEventListener('click', (event) => {
+      const btn = event.target.closest('.btn');
+      if (!btn || !btn.dataset.voice) return;
+      voices.querySelectorAll('.btn').forEach((other) => other.classList.remove('is-on'));
+      btn.classList.add('is-on');
+      // Запоминаем выбор и сразу даём послушать — иначе непонятно, что вышло.
+      capri.state = capri.state || {};
+      capri.state.config = capri.state.config || {};
+      capri.state.config.voice = btn.dataset.voice;
+      capri.post('set-behavior', { key: 'voice-name', value: btn.dataset.voice });
+      capri.status('голос: ' + btn.textContent.trim());
+    });
+  }
+}
+
+/**
+ * Раздел «Звук»: три ползунка и пробная фраза.
+ *
+ * Ползунки шлют события при каждом сдвиге, а каждое — запись в config.json,
+ * поэтому ждём паузу. Подпись обновляем сразу: иначе ползунок «немой».
+ */
+function wireSound() {
+  const sliders = [
+    { id: 'voice-volume', key: 'voice-volume', label: 'voice-volume-value', suffix: ' %' },
+    { id: 'voice-rate', key: 'voice-rate', label: 'voice-rate-value', speech: true },
+    { id: 'voice-pitch', key: 'voice-pitch', label: 'voice-pitch-value', speech: true },
+  ];
+
+  sliders.forEach((slider) => {
+    const input = document.getElementById(slider.id);
+    if (!input) return;
+    let timer = 0;
+    input.addEventListener('input', () => {
+      const label = document.getElementById(slider.label);
+      if (label) {
+        label.textContent = slider.speech ? speechLabel(input.value) : input.value + slider.suffix;
+      }
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        capri.post('set-behavior', { key: slider.key, value: Number(input.value) });
+        capri.status('звук: ' + (label ? label.textContent : input.value));
+      }, 160);
+    });
+  });
+
+  const test = document.getElementById('voice-test');
+  if (test) {
+    test.addEventListener('click', () => {
+      capri.post('set-behavior', { key: 'voice-test', value: true });
+      capri.status('говорю пробную фразу…');
+    });
+  }
+}
+
+/** Раздел «Магазин»: покупка и надевание скина прямо из настроек. */
+function wireShop() {
+  const box = document.getElementById('shop-skins');
+  if (!box) return;
+  box.addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-shop]');
+    if (!btn) return;
+    const action = btn.dataset.shop === 'buy' ? 'shop-buy' : 'shop-equip';
+    capri.post(action, { skin: btn.dataset.skin });
+    btn.disabled = true;
+    btn.textContent = btn.dataset.shop === 'buy' ? 'Покупаю…' : 'Надеваю…';
+    // Состояние придёт от ядра на 'ready': кошелёк и галочка «надет»
+    // обновятся сами, без перезагрузки страницы.
+    setTimeout(() => capri.post('ready'), 400);
+  });
 }
 
 document.addEventListener('DOMContentLoaded', () => {

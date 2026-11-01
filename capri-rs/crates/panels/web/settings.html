@@ -180,10 +180,117 @@
           </div>
         </div>
       </section>
-      <section class="pane" data-pane="shop" data-stub></section>
+      <section class="pane" data-pane="shop">
+        <h2 class="pane-title">Магазин <span class="phase">Экран 3</span></h2>
+
+        <div class="cards">
+          <div class="card">
+            <h3>Кошелёк <small class="dim">ECS за разговоры и игры</small></h3>
+            <div class="row">
+              <div class="row-label">Наличные</div>
+              <span class="row-value" id="shop-money">—</span>
+            </div>
+            <div class="row">
+              <div class="row-label">Уровень<small>и сколько до следующего</small></div>
+              <span class="row-value" id="shop-level">—</span>
+            </div>
+          </div>
+
+          <div class="card card-wide">
+            <h3>Скины <small class="dim">перекрашивают фигуру</small></h3>
+            <div class="shop-grid" id="shop-skins"></div>
+            <div class="hint">
+              Понравился скин — надевай прямо здесь, витрину открывать не обязательно.
+              За покупкой Капри сама перекрасится, перезапуск не нужен.
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="pane" data-pane="agents" data-stub></section>
-      <section class="pane" data-pane="sound" data-stub></section>
-      <section class="pane" data-pane="voice" data-stub></section>
+
+      <section class="pane" data-pane="sound">
+        <h2 class="pane-title">Звук <span class="phase">Фаза 2</span></h2>
+
+        <div class="cards">
+          <div class="card">
+            <h3>Громкость <small class="dim">как громко меня слышно</small></h3>
+
+            <div class="row">
+              <div class="row-label">Громкость голоса</div>
+              <span class="row-value" id="voice-volume-value">—</span>
+            </div>
+            <div class="row">
+              <input type="range" id="voice-volume" min="0" max="100" value="100">
+            </div>
+
+            <div class="row">
+              <div class="row-label">Скорость речи<small>быстрее или медленнее обычного</small></div>
+              <span class="row-value" id="voice-rate-value">—</span>
+            </div>
+            <div class="row">
+              <input type="range" id="voice-rate" min="-50" max="50" value="0">
+            </div>
+
+            <div class="row">
+              <div class="row-label">Тон<small>ниже — солиднее, выше — звонче</small></div>
+              <span class="row-value" id="voice-pitch-value">—</span>
+            </div>
+            <div class="row">
+              <input type="range" id="voice-pitch" min="-50" max="50" value="0">
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Как звучит <small class="dim">проверка вслепую</small></h3>
+            <div class="row">
+              <div class="row-label">Проверить голос<small>скажу пробную фразу с текущими настройками</small></div>
+              <button class="btn btn-accent" id="voice-test">Сказать</button>
+            </div>
+            <div class="hint">
+              Если после нажатия тихо — проверь громкость выше и что не выбран
+              движок, которого нет: у сети может не быть, а SAPI работает всегда.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="pane" data-pane="voice">
+        <h2 class="pane-title">Голос <span class="phase">Фаза 2</span></h2>
+
+        <div class="cards">
+          <div class="card">
+            <h3>Движок <small class="dim">чем синтезировать речь</small></h3>
+
+            <div class="row">
+              <div class="row-label">Синтезатор</div>
+              <div class="segmented" id="tts-engine">
+                <button class="btn" data-engine="edge">Edge</button>
+                <button class="btn" data-engine="sapi">SAPI</button>
+                <button class="btn" data-engine="silero">Silero</button>
+              </div>
+            </div>
+            <div class="hint">
+              <b>Edge</b> — живые голоса из сети, нужен интернет.
+              <b>SAPI</b> — встроенный в Windows, работает всегда и офлайн, звучит
+              проще. <b>Silero</b> — офлайн-модель, если она у тебя стоит.
+            </div>
+          </div>
+
+          <div class="card card-wide">
+            <h3>Голос <small class="dim">для движка Edge</small></h3>
+            <div class="segmented voice-grid" id="voice-name"></div>
+
+            <div class="row">
+              <div class="row-label">Живая интонация<small>вздохи и ударения вместо ровного чтения</small></div>
+              <div class="segmented" id="voice-lively">
+                <button class="btn" data-on="1">Включена</button>
+                <button class="btn" data-on="0">Выключена</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
       <section class="pane" data-pane="translate">
         <h2 class="pane-title">Перевод <span class="phase">Экран 11</span></h2>
 

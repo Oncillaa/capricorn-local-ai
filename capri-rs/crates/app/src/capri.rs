@@ -34,10 +34,27 @@ use crate::wake::Wake;
 
 /// Панели, которые уже нарисованы и открываются по-настоящему.
 ///
-/// Список пополняется по мере фаз: остальные пункты кольца отвечают, на какой
-/// фазе появятся, вместо того чтобы показывать пустое окно.
-const READY_PANELS: [&str; 7] =
-    ["settings", "shop", "levels", "media", "chess", "chat", "terminal"];
+/// Список берётся прямо из `PanelId::ALL`, а не пишется руками: раньше здесь
+/// лежал ручной перечень, панель перевода в него забыли вписать, и кольцо на
+/// живой кнопке отвечало «ещё в разработке — появится на фазе 6», хотя страница
+/// уже была в сборке. Теперь забыть нечего: появилась панель — она открывается.
+fn panel_is_ready(name: &str) -> bool {
+    capri_panels::PanelId::ALL
+        .iter()
+        .any(|id| id.as_str() == name)
+}
+
+/// Привести название движка речи к тому, что знает синтезатор.
+///
+/// Страница присылает что угодно, а неизвестное имя означает «не говорит
+/// вообще» — молчащая Капри это худший из возможных исходов настройки.
+fn normalise_engine(name: &str) -> String {
+    match name.trim().to_lowercase().as_str() {
+        "sapi" => "sapi".to_string(),
+        "silero" => "silero".to_string(),
+        _ => "edge".to_string(),
+    }
+}
 
 /// Что нужно Капри, чтобы работать.
 pub struct Deps {
@@ -634,7 +651,7 @@ impl Capri {
                     // Панель может быть ещё не нарисована: тогда честно
                     // говорим, на какой фазе она появится, а не открываем
                     // пустое окно.
-                    capri_core::menu::Target::Panel(panel) if READY_PANELS.contains(&panel) => {
+                    capri_core::menu::Target::Panel(panel) if panel_is_ready(panel) => {
                         self.handle_job(Job::OpenPanel(panel.to_string()))
                     }
                     capri_core::menu::Target::Panel(_) | capri_core::menu::Target::Soon => {
@@ -798,7 +815,66 @@ impl Capri {
                         if url.is_empty() { "выключен" } else { "включён" }
                     );
                 }
+                BehaviorSetting::TtsEngine(engine) => {
+                    let engine = normalise_engine(engine);
+                    cfg.tts_engine = engine.clone();
+                    if let Err(e) = cfg.set_value("tts_engine", serde_json::json!(engine)) {
+                        log::warn!("Не сохранила движок речи: {e}");
+                    }
+                    log::info!("Голос: движок {engine}");
+                }
+                BehaviorSetting::VoiceName(name) => {
+                    let name = name.trim().to_string();
+                    cfg.voice = name.clone();
+                    if let Err(e) = cfg.set_value("voice", serde_json::json!(name)) {
+                        log::warn!("Не сохранила голос: {e}");
+                    }
+                    log::info!("Голос: {name}");
+                }
+                BehaviorSetting::VoiceLively(on) => {
+                    cfg.voice_lively = *on;
+                    if let Err(e) = cfg.set_value("voice_lively", serde_json::json!(on)) {
+                        log::warn!("Не сохранила живость голоса: {e}");
+                    }
+                    log::info!(
+                        "Живая интонация: {}",
+                        if *on { "включена" } else { "выключена" }
+                    );
+                }
+                BehaviorSetting::VoiceVolume(volume) => {
+                    let volume = (*volume).min(100);
+                    cfg.voice_volume = volume;
+                    if let Err(e) = cfg.set_value("voice_volume", serde_json::json!(volume)) {
+                        log::warn!("Не сохранила громкость голоса: {e}");
+                    }
+                    log::info!("Громкость голоса: {volume}");
+                }
+                BehaviorSetting::VoiceRate(percent) => {
+                    let rate = capri_core::config::speech_string(*percent);
+                    cfg.voice_rate = rate.clone();
+                    if let Err(e) = cfg.set_value("voice_rate", serde_json::json!(rate)) {
+                        log::warn!("Не сохранила скорость речи: {e}");
+                    }
+                    log::info!("Скорость речи: {rate}");
+                }
+                BehaviorSetting::VoicePitch(percent) => {
+                    let pitch = capri_core::config::speech_string(*percent);
+                    cfg.voice_pitch = pitch.clone();
+                    if let Err(e) = cfg.set_value("voice_pitch", serde_json::json!(pitch)) {
+                        log::warn!("Не сохранила тон речи: {e}");
+                    }
+                    log::info!("Тон речи: {pitch}");
+                }
+                // Пробная фраза: ничего не запоминаем, только говорим.
+                BehaviorSetting::VoiceTest => {}
             }
+        }
+
+        // Голос проверяем уже после того, как отпустили конфиг: синтез идёт
+        // секундами, и держать на это замок настроек нельзя.
+        if matches!(setting, BehaviorSetting::VoiceTest) {
+            let phrase = "Привет! Это мой голос. Так я буду с тобой разговаривать.";
+            self.handle_job(Job::Say(phrase.to_string()));
         }
     }
 
@@ -1338,5 +1414,29 @@ mod tests {
             let value = rand_percent();
             assert!((0.0..100.0).contains(&value));
         }
+    }
+
+    #[test]
+    fn every_ring_sector_that_names_a_panel_can_actually_open_it() {
+        // Живой случай: страница перевода была в сборке, но её не было в
+        // ручном списке «готовых», и кнопка в кольце отвечала «ещё в
+        // разработке». Теперь список выводится из `PanelId::ALL`, и этот тест
+        // стережёт, чтобы сектор не сослался на панель, которой нет.
+        for sector in capri_core::menu::SECTORS.iter().chain(capri_core::menu::TOOLS.iter()) {
+            if let Some(panel) = capri_core::menu::panel_of(sector) {
+                assert!(
+                    panel_is_ready(panel),
+                    "сектор «{}» открывает панель «{panel}», а её нет в PanelId",
+                    sector.label
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn translate_panel_is_openable() {
+        // Прямая проверка того, что человек видел своими глазами.
+        assert!(panel_is_ready("translate"));
+        assert!(panel_is_ready("chat"));
     }
 }

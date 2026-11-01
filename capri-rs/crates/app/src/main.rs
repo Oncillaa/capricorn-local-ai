@@ -2008,6 +2008,17 @@ fn panel_state(cfg: &Arc<RwLock<Config>>, base_dir: &PathBuf, monitors: &[Monito
             "tts_engine": config.tts_engine,
             "voice": config.voice,
             "voice_volume": config.voice_volume,
+            // Голос: скорость и тон ползункам нужны числами, а синтезатору —
+            // строками вида "+10%". Наружу отдаём проценты.
+            "voice_rate": capri_core::config::speech_percent(&config.voice_rate),
+            "voice_pitch": capri_core::config::speech_percent(&config.voice_pitch),
+            "voice_lively": config.voice_lively,
+            "voice_fx": config.voice_fx,
+            // Список голосов для раздела «Голос»: имя и как звучит.
+            "voices": capri_voice::edge::russian_voices()
+                .into_iter()
+                .map(|(id, note)| serde_json::json!({ "id": id, "note": note }))
+                .collect::<Vec<_>>(),
             "mic_device": config.mic_device,
             "wake_words": config.wake_words,
             // Вид: размер, живость и монитор.
@@ -2142,6 +2153,20 @@ fn behavior_setting(key: &str, data: &serde_json::Value) -> Option<capri_ui::Beh
         }
         "translate-to" => text_of(&value).map(BehaviorSetting::TranslateTo),
         "translate-url" => text_of(&value).map(BehaviorSetting::TranslateUrl),
+        // Голос: чем и каким голосом говорить.
+        "tts-engine" => text_of(&value).map(BehaviorSetting::TtsEngine),
+        "voice-name" => text_of(&value).map(BehaviorSetting::VoiceName),
+        "voice-lively" => flag_of(&value).map(BehaviorSetting::VoiceLively),
+        // Звук: громкость, скорость, тон и пробная фраза.
+        "voice-volume" => number_of(&value)
+            .map(|v| BehaviorSetting::VoiceVolume(v.clamp(0, 100) as u8)),
+        "voice-rate" => {
+            number_of(&value).map(|v| BehaviorSetting::VoiceRate(v as i32))
+        }
+        "voice-pitch" => {
+            number_of(&value).map(|v| BehaviorSetting::VoicePitch(v as i32))
+        }
+        "voice-test" => Some(BehaviorSetting::VoiceTest),
         _ => None,
     }
 }
