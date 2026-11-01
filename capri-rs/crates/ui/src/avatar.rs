@@ -14,10 +14,11 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION,
+    NOTIFYICONDATAW, NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
+    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu,
     DestroyWindow, DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW,
     GetSystemMetrics, GetWindowThreadProcessId, KillTimer, LoadIconW, PostMessageW, PostQuitMessage,
     RegisterClassExW, SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, TrackPopupMenu,
@@ -897,6 +898,10 @@ fn add_tray_icon(hwnd: HWND, instance: windows::Win32::Foundation::HINSTANCE) ->
         // Результат пишем в лог: «иконки нет» надо замечать сразу, а не искать
         // глазами по трею.
         if Shell_NotifyIconW(NIM_ADD, &data).as_bool() {
+            // Версия 4 — иначе всплывающие подсказки и нажатия ведут себя по
+            // правилам двадцатилетней давности.
+            data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
+            let _ = Shell_NotifyIconW(NIM_SETVERSION, &data);
             log::info!("Иконка в трее: поставлена");
             true
         } else {
@@ -909,6 +914,11 @@ fn add_tray_icon(hwnd: HWND, instance: windows::Win32::Foundation::HINSTANCE) ->
                 data.hIcon,
                 data.cbSize
             );
+            // Неудачная попытка иконку не принимает — уничтожаем её сами,
+            // иначе каждая из пяти попыток оставляет утечку в HANDLE.
+            if !data.hIcon.is_invalid() {
+                let _ = DestroyIcon(data.hIcon);
+            }
             false
         }
     }
@@ -920,7 +930,10 @@ fn add_tray_icon(hwnd: HWND, instance: windows::Win32::Foundation::HINSTANCE) ->
 /// рисуем её теми же двумя цветами, что и аватар: фиолетовый диск и зелёные
 /// глаза в пиксель.
 fn tray_icon() -> Option<windows::Win32::UI::WindowsAndMessaging::HICON> {
-    use windows::Win32::Graphics::Gdi::{CreateBitmap, DeleteObject};
+    use windows::Win32::Graphics::Gdi::{
+        CreateBitmap, CreateDIBSection, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+        DIB_RGB_COLORS,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO};
 
     const SIZE: usize = 32;
@@ -977,11 +990,32 @@ fn tray_icon() -> Option<windows::Win32::UI::WindowsAndMessaging::HICON> {
     }
 
     unsafe {
-        let color = CreateBitmap(SIZE as i32, SIZE as i32, 1, 32, Some(pixels.as_ptr().cast()));
-        if color.is_invalid() {
-            log::warn!("Иконка в трее: цветная картинка не создалась");
-            return None;
-        }
+        // Для иконки с прозрачностью нужен именно DIB-раздел: `CreateBitmap`
+        // с 32 битами альфу не переносит, и `CreateIconIndirect` собирает
+        // иконку по маске. Маска у нас нулевая («показывать всё»), поэтому
+        // получался сплошной тёмный квадрат вместо круга.
+        let header = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: SIZE as i32,
+                biHeight: -(SIZE as i32), // минус — строки сверху вниз
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+        let color = match CreateDIBSection(None, &header, DIB_RGB_COLORS, &mut bits, None, 0) {
+            Ok(bitmap) if !bits.is_null() => bitmap,
+            _ => {
+                log::warn!("Иконка в трее: цветная картинка не создалась");
+                return None;
+            }
+        };
+        std::ptr::copy_nonoverlapping(pixels.as_ptr(), bits.cast::<u8>(), pixels.len());
+
         // Маска из нулей — «показывать всё»: прозрачность задаёт альфа.
         let zero_mask = vec![0u8; SIZE * SIZE / 8];
         let mask = CreateBitmap(
