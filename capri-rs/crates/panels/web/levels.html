@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>CAPRI // УРОВНИ</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body class="levels-body">
+  <div class="app levels-app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="glyph" aria-hidden="true"></div>
+        <div class="brand-title">CAPRI <span class="slash">//</span> УРОВНИ</div>
+      </div>
+      <div class="chips">
+        <span class="chip chip-gold" id="chip-balance">0 ECS</span>
+        <span class="chip chip-green" id="chip-status">FULL</span>
+      </div>
+    </header>
+
+    <!-- Макет одностраничный: слева портрет, справа всё остальное.
+         Раньше здесь были вкладки — но на эталоне видно всё сразу. -->
+    <main class="content levels-content">
+      <div class="portrait">
+        <img id="portrait" src="capri.png" alt="Капри">
+        <div class="portrait-caption" id="portrait-caption">Сейчас спокойна</div>
+      </div>
+
+      <div class="levels-right">
+        <div class="level-head">
+          <div class="level-badge" id="level-number">4</div>
+          <div class="level-head-text">
+            <div class="level-label">УРОВЕНЬ</div>
+            <div class="bar"><i id="xp-bar" style="width: 0%"></i></div>
+            <div class="bar-caption">
+              <span id="xp-text">0 / 0 опыта</span>
+              <span id="xp-next">до 5 уровня</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="reward-row">
+          <div class="reward" id="reward-money">Уровень 5: +70 ECS</div>
+          <div class="reward" id="reward-snack">Уровень 5: вкусняшка</div>
+        </div>
+
+        <div class="mood-row">
+          <div class="mood-cell">
+            <span class="mood-name">Радость</span>
+            <span class="mood-value" id="joy-label">—</span>
+            <div class="bar mood"><i id="joy-bar" style="width: 0%"></i></div>
+          </div>
+          <div class="mood-cell">
+            <span class="mood-name">Усталость</span>
+            <span class="mood-value" id="tired-label">—</span>
+            <div class="bar mood tired"><i id="tired-bar" style="width: 0%"></i></div>
+          </div>
+        </div>
+
+        <div class="section-title">СТАТИСТИКА</div>
+        <div class="stats" id="stats"></div>
+
+        <div class="section-title">
+          СКИНЫ <small class="dim">— купленные контуры, надевай любой</small>
+        </div>
+        <div class="skin-row" id="skins-owned"></div>
+
+        <div class="section-title">ИНВЕНТАРЬ</div>
+        <div class="inventory" id="inventory"></div>
+        <div class="row" style="margin-top: 12px;">
+          <button class="btn btn-accent" data-action="eat">Съесть вкусняшку</button>
+        </div>
+      </div>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status-text" class="dim">запуск…</span>
+      <span class="spacer"></span>
+      <span class="dim" id="save-path">save_data.json</span>
+    </footer>
+  </div>
+
+  <script src="bridge.js"></script>
+  <script src="levels.js"></script>
+</body>
+</html>

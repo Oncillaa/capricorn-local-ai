@@ -3,11 +3,11 @@
 use std::path::PathBuf;
 
 use capri_core::platform::{
-    InstalledProgram, KeyStroke, MediaCommand, PcReport, Platform, PowerMode, ProcInfo, Res,
-    ScrollDirection, TabCommand, Track, WindowInfo,
+    InstalledProgram, KeyStroke, MediaCommand, MonitorInfo, PcReport, Platform, PowerMode, ProcInfo,
+    Res, ScrollDirection, TabCommand, Track, WindowInfo,
 };
 
-use crate::{audio, input, launch, media, screenshot, system, windows_api};
+use crate::{audio, input, launch, media, monitors, screenshot, system, windows_api};
 
 pub struct WindowsPlatform {
     base_dir: PathBuf,
@@ -168,6 +168,11 @@ impl Platform for WindowsPlatform {
 
     fn kill_process(&self, name: &str, force: bool) -> usize {
         system::kill_process(name, force)
+    }
+
+    // ---------- экран ----------
+    fn monitors(&self) -> Vec<MonitorInfo> {
+        monitors::list()
     }
 
     // ---------- система ----------

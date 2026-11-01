@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>CAPRI // МАГАЗИН</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="glyph" aria-hidden="true"></div>
+        <div>
+          <div class="brand-title">CAPRI <span class="slash">//</span> МАГАЗИН</div>
+          <div class="brand-sub">скины Капри · расплата в ECS</div>
+        </div>
+      </div>
+      <div class="chips">
+        <span class="chip" id="chip-version">v—</span>
+        <span class="chip" id="chip-bridge">мост: подключение…</span>
+      </div>
+    </header>
+
+    <nav class="nav">
+      <button class="nav-item is-active" data-tab="skins">Скины</button>
+      <button class="nav-item" data-tab="behavior">Поведение</button>
+      <button class="nav-item" data-tab="theme">Тема</button>
+    </nav>
+
+    <main class="content">
+      <section class="pane is-active" data-pane="skins">
+        <div class="shop-head">
+          <div class="phrase" id="phrase">…</div>
+          <div class="balance" id="balance">0 ECS</div>
+        </div>
+        <div class="skins" id="skins"></div>
+      </section>
+
+      <section class="pane" data-pane="behavior">
+        <h2 class="pane-title">Поведение <span class="phase">Фаза 8</span></h2>
+        <div class="cards">
+          <div class="card">
+            <h3>Пока не в продаже</h3>
+            <div class="stub">
+              Здесь будут характеры Капри: болтливая, сонная, дерзкая. Каждый
+              меняет набор реплик и манеру говорить.
+              <br><br>
+              Настроить поведение уже сейчас можно в
+              <b>Настройки → Поведение</b>.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="pane" data-pane="theme">
+        <h2 class="pane-title">Тема <span class="phase">Фаза 8</span></h2>
+        <div class="cards">
+          <div class="card">
+            <h3>Оформление интерфейса</h3>
+            <div class="stub">
+              Палитры для панелей и радиального меню: неоновый фиолетовый,
+              кислотный зелёный, «Найт-Сити» с ламповой желтизной.
+              <br><br>
+              Персонаж перекрашивается скинами — они уже работают, вкладка
+              <b>Скины</b>.
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status-text" class="dim">запуск…</span>
+      <span class="spacer"></span>
+      <span class="dim" id="save-path">save_data.json</span>
+    </footer>
+  </div>
+
+  <script src="bridge.js"></script>
+  <script src="shop.js"></script>
+</body>
+</html>

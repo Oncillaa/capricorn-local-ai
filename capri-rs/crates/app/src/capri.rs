@@ -32,6 +32,13 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::wake::Wake;
 
+/// Панели, которые уже нарисованы и открываются по-настоящему.
+///
+/// Список пополняется по мере фаз: остальные пункты кольца отвечают, на какой
+/// фазе появятся, вместо того чтобы показывать пустое окно.
+const READY_PANELS: [&str; 7] =
+    ["settings", "shop", "levels", "media", "chess", "chat", "terminal"];
+
 /// Что нужно Капри, чтобы работать.
 pub struct Deps {
     pub base_dir: PathBuf,
@@ -43,6 +50,8 @@ pub struct Deps {
     pub mic_level: Arc<AtomicU32>,
     /// Текущий микрофон (для меню и подсказок).
     pub current_mic: Arc<RwLock<Option<String>>>,
+    /// Канал к панелям интерфейса (WebView2): попросить открыть окно.
+    pub panels: Sender<capri_panels::Command>,
 }
 
 /// Работа для главного потока: всё, что меняет состояние Капри.
@@ -77,8 +86,28 @@ pub enum Job {
     SetProfile(String, String, String),
     /// Открыть `config.json`.
     OpenConfig,
+    /// Открыть панель интерфейса по имени (`"settings"`, `"shop"`, …).
+    OpenPanel(String),
     /// Надеть скин.
     SelectSkin(String),
+    /// Перекрасить фигуру без записи в прогресс.
+    SkinColor(Option<[u8; 3]>),
+    /// Капри погладили (клик по фигуре) — растёт радость и статистика.
+    Petted,
+    /// Сменить размер, живость или монитор.
+    Character(capri_ui::CharacterSetting),
+    /// Изменить характер: болталка, перебивание, прогулки.
+    Behavior(capri_ui::BehaviorSetting),
+    /// Выбран пункт радиального меню (идентификатор сектора).
+    RadialAction(String),
+    /// Горячая клавиша не встала.
+    HotkeyError(String),
+    /// Положить текст в буфер обмена.
+    CopyToClipboard(String),
+    /// Озвучка закончилась (приходит из потока речи).
+    SpeechDone {
+        interrupted: bool,
+    },
 }
 
 /// Мост между потоками: сюда можно звать откуда угодно.
@@ -101,6 +130,12 @@ pub struct Bridge {
 impl Bridge {
     /// Пришла готовая фраза.
     pub fn heard(&self, text: &str, audio: &[i16]) {
+        // Шум микрофона Vosk иногда превращает в «бай бай бай бай …».
+        // Такое не команда: молча выкидываем, иначе Капри отвечает на шум.
+        if capri_voice::listener::looks_like_noise(text) {
+            log::debug!("Похоже на шум, пропускаю: {text}");
+            return;
+        }
         let _ = self.jobs.send(Job::Command {
             text: text.to_string(),
             audio: audio.to_vec(),
@@ -160,7 +195,15 @@ impl Bridge {
             UiRequest::SetProfile(mode, name, gender) => Job::SetProfile(mode, name, gender),
             UiRequest::Reload => Job::Reload,
             UiRequest::OpenConfig => Job::OpenConfig,
+            UiRequest::OpenPanel(name) => Job::OpenPanel(name),
             UiRequest::SelectSkin(name) => Job::SelectSkin(name),
+            UiRequest::SkinColor(color) => Job::SkinColor(color),
+            UiRequest::Petted => Job::Petted,
+            UiRequest::Character(setting) => Job::Character(setting),
+            UiRequest::Behavior(setting) => Job::Behavior(setting),
+            UiRequest::RadialAction(id) => Job::RadialAction(id),
+            UiRequest::HotkeyError(why) => Job::HotkeyError(why),
+            UiRequest::CopyToClipboard(text) => Job::CopyToClipboard(text),
         };
         let _ = self.jobs.send(job);
     }
@@ -207,6 +250,12 @@ pub struct Capri {
     last_partial_wake: Instant,
     /// Живём ли ещё (гасит поток «болталки»).
     alive: Arc<AtomicBool>,
+    /// Канал к панелям интерфейса.
+    panels: Sender<capri_panels::Command>,
+    /// Канал в поток озвучки: главный цикл не ждёт, пока голос прозвучит.
+    speech: Sender<String>,
+    /// Слушать продолжение после этой фразы?
+    follow_up_after_speech: bool,
 }
 
 impl Capri {
@@ -242,6 +291,23 @@ impl Capri {
 
         let listener = Self::spawn_listener(&deps, &snapshot, &bridge);
 
+        // Озвучка — отдельный поток. Раньше главный цикл стоял, пока голос
+        // синтезировался и звучал: на медленной сети это секунды на каждую
+        // фразу, и всё это время окно, меню и трей не отвечали.
+        let (speech_tx, speech_rx) = std::sync::mpsc::channel::<String>();
+        {
+            let speaker = Arc::clone(&deps.speaker);
+            let bridge = Arc::clone(&bridge);
+            std::thread::spawn(move || {
+                for text in speech_rx {
+                    let interrupted = speaker.say(&text);
+                    if bridge.jobs.send(Job::SpeechDone { interrupted }).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
         let capri = Self {
             base_dir: deps.base_dir.clone(),
             cfg: Arc::clone(&deps.cfg),
@@ -263,6 +329,9 @@ impl Capri {
             hidden: false,
             last_partial_wake: Instant::now() - Duration::from_secs(10),
             alive: Arc::new(AtomicBool::new(true)),
+            panels: deps.panels.clone(),
+            speech: speech_tx,
+            follow_up_after_speech: false,
         };
         (capri, jobs_rx, bridge)
     }
@@ -316,10 +385,14 @@ impl Capri {
 
     /// Крутить Капри до выхода. Возвращает код выхода.
     pub fn run(&mut self, jobs: Receiver<Job>) -> i32 {
+        // Скин, купленный в прошлый раз, надеваем сразу — до приветствия,
+        // чтобы Капри не появилась в чужом цвете.
+        self.wear_equipped_skin();
         self.greet();
 
         // «Болталка» живёт отдельным потоком и просто подкидывает работу.
         let chatter = self.start_chatter_thread();
+        let mut last_mood_tick = Instant::now();
         let mut last_fullscreen_check = Instant::now();
         let mut fullscreen = false;
 
@@ -349,6 +422,12 @@ impl Capri {
             {
                 self.hidden = true;
                 let _ = self.bridge.events.send(UiEvent::Vanish);
+            }
+
+            // Настроение: раз в минуту усталость подрастает, радость тает.
+            if last_mood_tick.elapsed() > Duration::from_secs(60) {
+                last_mood_tick = Instant::now();
+                self.tick_mood();
             }
 
             // Раз в полминуты смотрим, не на весь ли экран чужая игра:
@@ -384,6 +463,10 @@ impl Capri {
                 } else {
                     self.say(&text);
                 }
+                false
+            }
+            Job::SpeechDone { interrupted } => {
+                self.finish_speech(interrupted);
                 false
             }
             Job::Chatter => {
@@ -483,17 +566,238 @@ impl Capri {
                 }
                 false
             }
+            // «Отправить в main» из терминала: своего второго терминала у
+            // приложения нет, поэтому команда уходит в буфер обмена — её
+            // можно вставить в любой настоящий терминал.
+            Job::CopyToClipboard(text) => {
+                match self.platform.clipboard_set(&text) {
+                    Ok(()) => log::info!("Команда скопирована в буфер: {text}"),
+                    Err(why) => log::warn!("Не скопировала команду: {why}"),
+                }
+                false
+            }
+            Job::OpenPanel(name) => {
+                match capri_panels::PanelId::parse(&name) {
+                    Some(panel) => {
+                        if self.panels.send(capri_panels::Command::Open(panel)).is_err() {
+                            log::warn!("Панели недоступны: канал закрыт");
+                        } else {
+                            log::info!("Открываю панель «{}»", panel.as_str());
+                        }
+                    }
+                    None => log::warn!("Неизвестная панель: {name}"),
+                }
+                false
+            }
+            // Скин по голосу: надеть можно только купленное. Покупка живёт
+            // в магазине, где видно цену и баланс.
             Job::SelectSkin(name) => {
                 let mut data = self.save.load();
-                data.equipped_skin = name.clone();
-                if !data.owned_skins.iter().any(|s| s == &name) {
-                    data.owned_skins.push(name.clone());
+                match data.equip(&name) {
+                    Ok(skin) => {
+                        if let Err(e) = self.save.save(&data) {
+                            log::warn!("Не сохранила скин: {e}");
+                        }
+                        log::info!("Надела скин «{}»", skin.name);
+                        let _ = self.bridge.events.send(UiEvent::SetSkin(skin.color));
+                    }
+                    Err(why) => {
+                        log::info!("Скин «{name}» не надела: {why}");
+                        self.say(&why);
+                    }
                 }
-                if let Err(e) = self.save.save(&data) {
-                    log::warn!("Не сохранила скин: {e}");
-                }
-                let _ = self.bridge.events.send(UiEvent::SetSkin(capri_core::save::skin_color(&name)));
                 false
+            }
+            // Перекраска без записи: прогресс уже сохранила оболочка.
+            Job::SkinColor(color) => {
+                let _ = self.bridge.events.send(UiEvent::SetSkin(color));
+                false
+            }
+            // Погладили: радость растёт, статистика помнит.
+            Job::Petted => {
+                let data = self.save.update(|data| data.on_pet());
+                log::debug!("Поглаживания: {} (радость {})", data.pettings, data.mood_joy);
+                false
+            }
+            Job::Character(setting) => {
+                self.apply_character(setting);
+                false
+            }
+            Job::Behavior(setting) => {
+                self.apply_behavior(setting);
+                false
+            }
+            // Радиальное меню: у каждого сектора своя судьба — часть уже
+            // открывает панель, остальные честно говорят, что их ещё нет.
+            Job::RadialAction(id) => match capri_core::menu::find(&id) {
+                Some(sector) => match sector.target {
+                    // Панель может быть ещё не нарисована: тогда честно
+                    // говорим, на какой фазе она появится, а не открываем
+                    // пустое окно.
+                    capri_core::menu::Target::Panel(panel) if READY_PANELS.contains(&panel) => {
+                        self.handle_job(Job::OpenPanel(panel.to_string()))
+                    }
+                    capri_core::menu::Target::Panel(_) | capri_core::menu::Target::Soon => {
+                        let text = format!(
+                            "«{}» ещё в разработке — она появится на фазе {}.",
+                            sector.label, sector.phase
+                        );
+                        self.handle_job(Job::Say(text))
+                    }
+                    // Переключение страниц кольца разбирает само окно меню:
+                    // до ядра такой сектор доходить не должен.
+                    capri_core::menu::Target::Submenu | capri_core::menu::Target::Back => {
+                        log::debug!("Меню: «{}» — это навигация, ядру делать нечего", sector.label);
+                        false
+                    }
+                },
+                None => {
+                    log::warn!("Меню прислало неизвестный пункт: {id}");
+                    false
+                }
+            },
+            Job::HotkeyError(why) => {
+                log::warn!("{why}");
+                // Молчать нельзя: иначе «клавиша не работает» выглядит как поломка.
+                let _ = self.bridge.events.send(UiEvent::Subtitle(why));
+                false
+            }
+        }
+    }
+
+    /// Размер, живость и монитор: пишем в `config.json` и сразу показываем.
+    ///
+    /// Настройки меняются ползунком, то есть часто. Поэтому сохраняем только
+    /// само значение (`set_value` перечитывает файл и меняет один ключ), а окно
+    /// получает событие и перерисовывается без перезапуска.
+    fn apply_character(&mut self, setting: capri_ui::CharacterSetting) {
+        {
+            let mut cfg = self.cfg.write();
+            match &setting {
+                capri_ui::CharacterSetting::Scale(percent) => {
+                    let percent = capri_core::config::clamp_scale(*percent);
+                    cfg.character_scale = percent;
+                    if let Err(e) = cfg.set_value("character_scale", serde_json::json!(percent)) {
+                        log::warn!("Не сохранила размер: {e}");
+                    }
+                    log::info!("Размер Капри: {percent} %");
+                }
+                capri_ui::CharacterSetting::Liveliness(value) => {
+                    let value = capri_core::config::normalize_liveliness(value);
+                    cfg.liveliness = value.to_string();
+                    if let Err(e) = cfg.set_value("liveliness", serde_json::json!(value)) {
+                        log::warn!("Не сохранила живость: {e}");
+                    }
+                    log::info!("Живость: {value}");
+                }
+                capri_ui::CharacterSetting::Monitor(index) => {
+                    cfg.monitor_index = *index;
+                    if let Err(e) = cfg.set_value("monitor_index", serde_json::json!(index)) {
+                        log::warn!("Не сохранила монитор: {e}");
+                    }
+                    log::info!("Монитор: {index}");
+                }
+            }
+        }
+        let _ = self.bridge.events.send(UiEvent::Character(setting));
+    }
+
+    /// Характер: болталка, перебивание, прогулки, поиск.
+    ///
+    /// Как и вид, это меняется ползунком и сразу пишется в `config.json` —
+    /// перезапуск не нужен, следующий шаг ядра уже видит новые значения.
+    fn apply_behavior(&mut self, setting: capri_ui::BehaviorSetting) {
+        use capri_ui::BehaviorSetting;
+        {
+            let mut cfg = self.cfg.write();
+            match &setting {
+                BehaviorSetting::BargeIn(on) => {
+                    cfg.barge_in = *on;
+                    if let Err(e) = cfg.set_value("barge_in", serde_json::json!(on)) {
+                        log::warn!("Не сохранила перебивание: {e}");
+                    }
+                    log::info!(
+                        "Перебивать меня: {}",
+                        if *on { "можно" } else { "нельзя" }
+                    );
+                }
+                BehaviorSetting::GreetOnStart(on) => {
+                    cfg.greet_on_start = *on;
+                    if let Err(e) = cfg.set_value("greet_on_start", serde_json::json!(on)) {
+                        log::warn!("Не сохранила приветствие: {e}");
+                    }
+                    log::info!(
+                        "Здороваться при запуске: {}",
+                        if *on { "да" } else { "нет" }
+                    );
+                }
+                BehaviorSetting::Chatter(on) => {
+                    cfg.chatter = *on;
+                    if let Err(e) = cfg.set_value("chatter", serde_json::json!(on)) {
+                        log::warn!("Не сохранила болталку: {e}");
+                    }
+                    log::info!(
+                        "Болталка: {}",
+                        if *on { "включена" } else { "выключена" }
+                    );
+                }
+                BehaviorSetting::ChatterMinutes(min, max) => {
+                    let (min, max) = capri_core::config::clamp_chatter_minutes(*min, *max);
+                    cfg.chatter_min_minutes = min;
+                    cfg.chatter_max_minutes = max;
+                    if let Err(e) = cfg.set_value("chatter_min_minutes", serde_json::json!(min)) {
+                        log::warn!("Не сохранила начало болталки: {e}");
+                    }
+                    if let Err(e) = cfg.set_value("chatter_max_minutes", serde_json::json!(max)) {
+                        log::warn!("Не сохранила конец болталки: {e}");
+                    }
+                    log::info!("Болталка: раз в {min:.0}–{max:.0} минут");
+                }
+                BehaviorSetting::RoamChance(percent) => {
+                    // В конфиге доля 0…1, в настройках — проценты.
+                    let share = (percent.clamp(0.0, 100.0) / 100.0 * 1000.0).round() / 1000.0;
+                    cfg.roam_chance = share;
+                    if let Err(e) = cfg.set_value("roam_chance", serde_json::json!(share)) {
+                        log::warn!("Не сохранила шанс прогулки: {e}");
+                    }
+                    log::info!("Шанс прогулки: {:.0} %", share * 100.0);
+                }
+                BehaviorSetting::SearchWhenUnsure(on) => {
+                    cfg.search_when_unsure = *on;
+                    if let Err(e) = cfg.set_value("search_when_unsure", serde_json::json!(on)) {
+                        log::warn!("Не сохранила поиск: {e}");
+                    }
+                    log::info!(
+                        "Искать в сети, когда не уверена: {}",
+                        if *on { "да" } else { "нет" }
+                    );
+                }
+                BehaviorSetting::TranslateTo(code) => {
+                    // Незнакомый код не беда: `translate::language` вернёт
+                    // русский, но записывать в конфиг мусор всё равно незачем.
+                    let code = capri_core::translate::language(code).code.to_string();
+                    cfg.translate_to = code.clone();
+                    if let Err(e) = cfg.set_value("translate_to", serde_json::json!(code)) {
+                        log::warn!("Не сохранила язык перевода: {e}");
+                    }
+                    log::info!(
+                        "Перевод: перевожу на {}",
+                        capri_core::translate::language(&code).russian_name
+                    );
+                }
+                BehaviorSetting::TranslateUrl(url) => {
+                    let url = url.trim().trim_end_matches('/').to_string();
+                    cfg.translate_libretranslate_url = url.clone();
+                    if let Err(e) =
+                        cfg.set_value("translate_libretranslate_url", serde_json::json!(url))
+                    {
+                        log::warn!("Не сохранила адрес LibreTranslate: {e}");
+                    }
+                    log::info!(
+                        "Перевод: LibreTranslate {}",
+                        if url.is_empty() { "выключен" } else { "включён" }
+                    );
+                }
             }
         }
     }
@@ -507,6 +811,48 @@ impl Capri {
     fn summon(&mut self) {
         self.hidden = false;
         let _ = self.bridge.events.send(UiEvent::Summon);
+    }
+
+    /// Надеть скин, который был выбран в прошлый раз.
+    fn wear_equipped_skin(&mut self) {
+        let data = self.save.load();
+        let color = capri_core::save::skin_color(&data.equipped_skin);
+        let _ = self.bridge.events.send(UiEvent::SetSkin(color));
+        if let Some(skin) = capri_core::save::skin_by_id(&data.equipped_skin) {
+            log::info!("Скин при запуске: {}", skin.name);
+        }
+    }
+
+    /// Минутный тик настроения: усталость растёт (ночью быстрее),
+    /// радость тает, если Капри долго не трогают.
+    fn tick_mood(&mut self) {
+        let night = {
+            use chrono::Timelike;
+            let hour = chrono::Local::now().hour();
+            hour >= 23 || hour < 6
+        };
+        let before = self.save.load();
+        let mut changed = false;
+        let data = self.save.update(|data| {
+            changed = data.tick_mood(night);
+        });
+        if changed {
+            log::debug!(
+                "Настроение: радость {} ({}), усталость {} ({})",
+                data.mood_joy,
+                data.joy_label(),
+                data.mood_tired,
+                data.tired_label()
+            );
+        }
+        // Совсем вымоталась — честно об этом говорит, но не чаще раза в час:
+        // порог проверяем по переходу, а не по состоянию.
+        if data.mood_tired >= 90 && before.mood_tired < 90 {
+            let text = persona::line_first("tired", &[("name", &capri_core::persona::user_name())]);
+            if !text.is_empty() {
+                self.say(&text);
+            }
+        }
     }
 
     /// Поздороваться при запуске.
@@ -535,6 +881,11 @@ impl Capri {
             .split_whitespace()
             .map(|w| w.to_string())
             .collect();
+
+        // Новая фраза важнее прошлой: просим замолчать и ставим новую.
+        if self.speaking {
+            self.speaker.stop();
+        }
         self.speaking = true;
         self.bridge.set_speaking(true);
 
@@ -545,22 +896,45 @@ impl Capri {
             }
         }
 
-        let interrupted = self.speaker.say(text);
+        // Сама озвучка — в стороне; сюда вернётся `Job::SpeechDone`.
+        if self.speech.send(text.to_string()).is_err() {
+            log::warn!("Поток озвучки не отвечает — говорю прямо здесь");
+            let interrupted = self.speaker.say(text);
+            self.finish_speech(interrupted);
+        }
+        false
+    }
 
+    /// Озвучка закончилась: снять пометки, вернуть микрофон, дать время на продолжение.
+    fn finish_speech(&mut self, interrupted: bool) {
+        if !self.speaking {
+            // Фразу уже перебили или учли (например, «позвать Капри»).
+            return;
+        }
         self.speaking = false;
         self.bridge.set_speaking(false);
         self.speech_end = Instant::now();
-        if barge_in {
-            if let Some(listener) = &self.listener {
+        if let Some(listener) = &self.listener {
+            if self.cfg.read().barge_in {
                 listener.request_reset();
+            } else {
+                listener.set_muted(false);
             }
-        } else if let Some(listener) = &self.listener {
-            std::thread::sleep(Duration::from_millis(250));
-            listener.set_muted(false);
         }
 
+        if interrupted {
+            let _ = self.bridge.events.send(UiEvent::Mode("idle".into(), 0.0));
+        } else if self.follow_up_after_speech {
+            // Даём договорить продолжение: «а ещё…».
+            let follow = Duration::from_secs_f32(self.cfg.read().followup_seconds.max(1.0));
+            self.awake_until = Instant::now() + follow;
+            let _ = self
+                .bridge
+                .events
+                .send(UiEvent::Mode("listening".into(), follow.as_secs_f32()));
+        }
+        self.follow_up_after_speech = false;
         self.check_voice_problem();
-        interrupted
     }
 
     /// Слова фразы в том же виде, в каком приходят из распознавания.
@@ -741,7 +1115,11 @@ impl Capri {
             std::thread::sleep(Duration::from_millis(1500));
         }
 
-        let interrupted = self.say(&reply.text);
+        // Продолжение слушаем, только если фраза не оборвётся: решает поток
+        // озвучки, поэтому просьбу ставим заранее.
+        self.follow_up_after_speech =
+            !reply.action_is(action::QUIT) && !reply.action_is(action::HIDE);
+        self.say(&reply.text);
 
         if reply.action_is(action::QUIT) {
             self.engine_stop();
@@ -752,17 +1130,6 @@ impl Capri {
             self.hidden = true;
             let _ = self.bridge.events.send(UiEvent::Vanish);
             return;
-        }
-        if !interrupted {
-            // Даём договорить продолжение: «а ещё…».
-            let follow = Duration::from_secs_f32(self.cfg.read().followup_seconds.max(1.0));
-            self.awake_until = Instant::now() + follow;
-            let _ = self
-                .bridge
-                .events
-                .send(UiEvent::Mode("listening".into(), follow.as_secs_f32()));
-        } else {
-            let _ = self.bridge.events.send(UiEvent::Mode("idle".into(), 0.0));
         }
     }
 
@@ -798,6 +1165,7 @@ impl Capri {
                 || current.user_name != fresh.user_name
                 || current.sites.len() != fresh.sites.len()
                 || current.apps.len() != fresh.apps.len()
+                || current.hotkey_menu != fresh.hotkey_menu
         };
         if !changed {
             return;
@@ -809,6 +1177,11 @@ impl Capri {
         self.engine.set_lists();
         self.wake = Wake::new(&fresh.wake_words);
         persona::set_user(fresh.user_name.clone(), &fresh.user_gender);
+        // Горячая клавиша могла поменяться — окно перевесит её само.
+        let _ = self
+            .bridge
+            .events
+            .send(UiEvent::Hotkey(fresh.hotkey_menu.clone()));
         self.bridge
             .window_ms
             .store((fresh.listen_window_seconds * 1000.0) as i32, Ordering::Relaxed);

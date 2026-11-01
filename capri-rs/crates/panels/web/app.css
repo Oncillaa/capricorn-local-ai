@@ -1,0 +1,1678 @@
+/* Дизайн-система панелей Капри.
+   Тёмный фон, неоновый фиолетовый, ядовито-зелёный, скошенные края.
+   Один файл на все панели: правила одинаковые, меняется только разметка. */
+
+:root {
+  --bg: #0a0612;
+  --bg-soft: #120a1f;
+  --panel: #150c24;
+  --panel-2: #1b1030;
+  --line: #2a1b3d;
+  --line-bright: #3d2a58;
+  --violet: #b026ff;
+  --violet-soft: #6c2bd9;
+  --green: #28ff96;
+  --pink: #ff2260;
+  --text: #e8ddf7;
+  --muted: #8a7aa6;
+  --skew: 12px;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; }
+
+body {
+  background:
+    radial-gradient(1100px 520px at 12% -10%, rgba(176, 38, 255, 0.18), transparent 62%),
+    radial-gradient(900px 460px at 100% 112%, rgba(40, 255, 150, 0.10), transparent 60%),
+    var(--bg);
+  color: var(--text);
+  font: 14px/1.45 "Segoe UI", "Inter", system-ui, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Сканлайны: тонкая сетка «как на ЭЛТ». Не мешает читать — 4% непрозрачности. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.045) 0 1px,
+    transparent 1px 3px
+  );
+  mix-blend-mode: overlay;
+  opacity: 0.55;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 236px 1fr;
+  grid-template-rows: 66px 1fr 34px;
+  height: 100vh;
+}
+
+/* ------------------------------------------------------------------ шапка */
+
+.topbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(27, 16, 48, 0.9), rgba(10, 6, 18, 0.4));
+}
+
+.brand { display: flex; align-items: center; gap: 12px; }
+
+/* Пиксельное «лицо» Капри: 5x5 из квадратов, чисто на CSS. */
+.glyph {
+  width: 34px;
+  height: 34px;
+  background:
+    linear-gradient(var(--violet), var(--violet)) 7px 9px / 6px 6px no-repeat,
+    linear-gradient(var(--green), var(--green)) 21px 9px / 6px 6px no-repeat,
+    linear-gradient(rgba(176, 38, 255, 0.55), rgba(176, 38, 255, 0.55)) 12px 20px / 10px 4px no-repeat,
+    var(--panel-2);
+  border: 1px solid var(--violet);
+  clip-path: polygon(0 0, 100% 0, 100% 72%, 78% 100%, 0 100%);
+  box-shadow: 0 0 18px rgba(176, 38, 255, 0.55);
+}
+
+.brand-title {
+  font-family: "Consolas", "JetBrains Mono", monospace;
+  font-size: 17px;
+  letter-spacing: 2.5px;
+  font-weight: 700;
+}
+.brand-title .slash { color: var(--violet); }
+.brand-sub {
+  font-size: 11px;
+  letter-spacing: 1.6px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.chips { margin-left: auto; display: flex; gap: 8px; }
+
+.chip {
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  letter-spacing: 1px;
+  padding: 5px 10px;
+  border: 1px solid var(--line-bright);
+  background: rgba(10, 6, 18, 0.6);
+  color: var(--muted);
+  clip-path: polygon(8px 0, 100% 0, 100% 100%, 0 100%, 0 8px);
+}
+.chip-green { color: var(--green); border-color: rgba(40, 255, 150, 0.45); }
+.chip-alert { color: var(--pink); border-color: rgba(255, 34, 96, 0.5); }
+
+/* -------------------------------------------------------------------- меню */
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 0 14px 14px;
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+}
+
+.nav-item {
+  appearance: none;
+  border: 0;
+  border-left: 2px solid var(--line-bright);
+  background: linear-gradient(90deg, rgba(27, 16, 48, 0.85), rgba(27, 16, 48, 0.25));
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: 1.4px;
+  text-align: left;
+  text-transform: uppercase;
+  padding: 11px 14px;
+  cursor: pointer;
+  clip-path: polygon(0 0, 100% 0, calc(100% - var(--skew)) 100%, 0 100%);
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.nav-item:hover { color: var(--text); border-left-color: var(--violet-soft); }
+.nav-item.is-active {
+  color: var(--green);
+  border-left-color: var(--green);
+  background: linear-gradient(90deg, rgba(40, 255, 150, 0.14), rgba(27, 16, 48, 0.2));
+  text-shadow: 0 0 12px rgba(40, 255, 150, 0.45);
+}
+
+/* Иконка слева от подписи — как на макете, где каждый пункт с пиктограммой. */
+.nav-ico {
+  display: inline-block;
+  width: 20px;
+  margin-right: 9px;
+  text-align: center;
+  font-size: 12px;
+  opacity: 0.85;
+}
+.nav-item.is-active .nav-ico { opacity: 1; }
+
+/* Нижняя панель действий: «Сохранить» и «Выйти» справа под карточками.
+   `sticky`, а не обычный блок в конце: контент настроек прокручивается, и
+   без закрепления кнопки уезжали за нижний край окна — на макете они
+   всегда на виду. */
+.pane-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 0 10px;
+  background: linear-gradient(180deg, rgba(10, 6, 18, 0), var(--bg) 42%);
+}
+.btn-save {
+  border-color: var(--green);
+  color: var(--bg);
+  background: var(--green);
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  padding: 11px 30px;
+  text-transform: uppercase;
+}
+.btn-save:hover:not(:disabled) {
+  color: var(--bg);
+  border-color: var(--green);
+  background: #4dffb0;
+  box-shadow: 0 0 26px rgba(40, 255, 150, 0.55);
+}
+.btn-quit {
+  border-color: var(--violet);
+  color: var(--violet);
+  letter-spacing: 1.4px;
+  padding: 11px 30px;
+  text-transform: uppercase;
+}
+.btn-quit:hover:not(:disabled) {
+  color: var(--violet);
+  border-color: var(--violet);
+  box-shadow: 0 0 22px rgba(176, 38, 255, 0.45);
+}
+
+/* ---------------------------------------------------------------- контент */
+
+.content { padding: 18px 22px 8px; overflow-y: auto; }
+
+.pane { display: none; animation: appear 0.16s ease-out; }
+.pane.is-active { display: block; }
+
+@keyframes appear {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.pane-title {
+  font-family: "Consolas", monospace;
+  font-size: 13px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--violet);
+  margin: 0 0 14px;
+}
+.pane-title::after {
+  content: "";
+  display: block;
+  height: 1px;
+  margin-top: 8px;
+  background: linear-gradient(90deg, var(--violet), transparent);
+}
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+
+.card {
+  position: relative;
+  background: linear-gradient(180deg, var(--panel), rgba(18, 10, 31, 0.9));
+  border: 1px solid var(--line);
+  border-top-color: var(--line-bright);
+  padding: 16px 18px 18px;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%);
+}
+.card h3 {
+  margin: 0 0 14px;
+  font-family: "Consolas", monospace;
+  font-size: 12px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.row:last-child { margin-bottom: 0; }
+.row-label { flex: 1; color: var(--text); }
+.row-label small { display: block; color: var(--muted); font-size: 11px; letter-spacing: 0.6px; }
+.row-value {
+  font-family: "Consolas", monospace;
+  color: var(--green);
+  font-size: 13px;
+  min-width: 54px;
+  text-align: right;
+}
+
+/* Ползунок: неоновая дорожка и светящийся бегунок. */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  background: linear-gradient(90deg, var(--violet) 0%, var(--violet) var(--fill, 100%), var(--line) var(--fill, 100%), var(--line) 100%);
+  outline: none;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  background: var(--bg);
+  border: 2px solid var(--green);
+  box-shadow: 0 0 10px rgba(40, 255, 150, 0.7);
+  cursor: pointer;
+}
+input[type="range"]:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Кнопки: S / M / L и действия. */
+.btn {
+  appearance: none;
+  font: inherit;
+  font-family: "Consolas", monospace;
+  font-size: 12px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  padding: 8px 14px;
+  color: var(--text);
+  background: rgba(27, 16, 48, 0.9);
+  border: 1px solid var(--line-bright);
+  cursor: pointer;
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+  transition: color 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.btn:hover:not(:disabled) { color: var(--green); border-color: var(--green); box-shadow: 0 0 14px rgba(40, 255, 150, 0.25); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn.is-on { color: var(--green); border-color: var(--green); background: rgba(40, 255, 150, 0.12); }
+.btn-accent { border-color: var(--violet); color: var(--violet); }
+.btn-accent:hover:not(:disabled) { color: var(--violet); border-color: var(--violet); box-shadow: 0 0 14px rgba(176, 38, 255, 0.35); }
+
+.btn-group { display: flex; gap: 6px; }
+
+/* Переключатель «Живость»: три состояния, как на скриншоте. */
+.segmented { display: flex; gap: 6px; }
+.segmented .btn { flex: 1; text-align: center; }
+
+/* Список «Экран»: тот же скошенный стиль, что у кнопок. */
+.select {
+  appearance: none;
+  font: inherit;
+  font-family: "Consolas", monospace;
+  font-size: 12px;
+  letter-spacing: 1px;
+  padding: 8px 28px 8px 12px;
+  color: var(--text);
+  background-color: rgba(27, 16, 48, 0.9);
+  background-image: linear-gradient(45deg, transparent 50%, var(--green) 50%),
+    linear-gradient(135deg, var(--green) 50%, transparent 50%);
+  background-position: right 14px center, right 9px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  border: 1px solid var(--line-bright);
+  cursor: pointer;
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+}
+.select:hover:not(:disabled) { border-color: var(--green); color: var(--green); }
+.select:disabled { opacity: 0.45; cursor: not-allowed; }
+.select option { background: var(--bg); color: var(--text); }
+
+/* Таблица фактов (что уже подключено). */
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; font-size: 13px; }
+.facts dt { color: var(--muted); letter-spacing: 0.6px; }
+.facts dd { margin: 0; font-family: "Consolas", monospace; color: var(--text); overflow-wrap: anywhere; }
+
+.stub {
+  border: 1px dashed var(--line-bright);
+  background: rgba(27, 16, 48, 0.35);
+  padding: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.stub b { color: var(--violet); font-weight: 600; }
+
+/* Текстовое поле в настройках: адреса, ключи, имена. */
+.field {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  font-family: "Consolas", monospace;
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  color: var(--text);
+  background: rgba(10, 6, 18, 0.85);
+  border: 1px solid var(--line-bright);
+  outline: none;
+}
+.field::placeholder { color: var(--muted); }
+.field:focus-visible { border-color: var(--violet); }
+
+/* Пояснение под блоком настроек — тише обычного текста. */
+.hint {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* --------------------------------------------- раздел «Перевод» в настройках */
+
+/* Десять языков в один ряд не влезают: карточка занимает всю ширину, а
+   кнопки переносятся. Иначе подпись сжималась в столбик по слогам, а список
+   языков обрезался за краем карточки. */
+.card-wide { grid-column: 1 / -1; }
+
+.row-stack { flex-direction: column; align-items: stretch; gap: 8px; }
+.row-stack .row-label { flex: none; }
+
+#translate-to { flex-wrap: wrap; }
+#translate-to .btn { flex: 1 1 auto; min-width: 108px; padding: 7px 10px; font-size: 11px; }
+
+.phase {
+  display: inline-block;
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  letter-spacing: 1.4px;
+  padding: 3px 8px;
+  margin-left: 8px;
+  color: var(--pink);
+  border: 1px solid rgba(255, 34, 96, 0.45);
+  vertical-align: middle;
+}
+
+/* --------------------------------------------------------------- статусбар */
+
+.statusbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 20px;
+  border-top: 1px solid var(--line);
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--muted);
+  background: rgba(10, 6, 18, 0.65);
+}
+.statusbar .spacer { flex: 1; }
+.statusbar .ok { color: var(--green); }
+.statusbar .dim { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
+
+/* Скроллбар в тон интерфейсу. */
+::-webkit-scrollbar { width: 10px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--line-bright); border: 3px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: var(--violet-soft); }
+
+/* ------------------------------------------------------------------ Магазин */
+
+.shop-head {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+.phrase {
+  flex: 1;
+  font-style: italic;
+  color: var(--muted);
+  border-left: 2px solid var(--violet);
+  padding-left: 12px;
+  line-height: 1.5;
+}
+.balance {
+  font-family: "Consolas", monospace;
+  font-size: 18px;
+  letter-spacing: 1px;
+  color: var(--green);
+  text-shadow: 0 0 16px rgba(40, 255, 150, 0.45);
+  white-space: nowrap;
+}
+
+.skins {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 14px;
+}
+.skin {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: linear-gradient(160deg, rgba(33, 20, 52, 0.92), rgba(18, 10, 31, 0.92));
+  border: 1px solid var(--line);
+}
+.skin:hover { border-color: var(--line-bright); }
+.skin.is-equipped {
+  border-color: var(--green);
+  box-shadow: 0 0 0 1px rgba(40, 255, 150, 0.22), 0 0 24px rgba(40, 255, 150, 0.12);
+}
+.skin-preview {
+  height: 108px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(circle at 50% 42%, rgba(176, 38, 255, 0.2), transparent 68%),
+    #0d0718;
+}
+/* Фигурка — силуэт в цвете скина. */
+.skin-figure {
+  width: 52px;
+  height: 84px;
+  border-radius: 46% 46% 32% 32%;
+  background: currentColor;
+  opacity: 0.92;
+  filter: drop-shadow(0 0 14px currentColor);
+}
+.skin-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.skin-name { font-weight: 600; letter-spacing: 0.4px; }
+.skin-price {
+  font-family: "Consolas", monospace;
+  font-size: 12px;
+  color: var(--green);
+  white-space: nowrap;
+}
+.skin.is-owned .skin-price { color: var(--muted); }
+.skin-note { font-size: 11px; color: var(--muted); line-height: 1.45; min-height: 32px; }
+.skin-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-family: "Consolas", monospace;
+  font-size: 10px;
+  letter-spacing: 1px;
+  padding: 2px 6px;
+  color: var(--bg);
+  background: var(--green);
+}
+
+/* ------------------------------------------------------------------- Уровни */
+
+/* Экран одноколоночный по контенту: `.app` даёт слева меню на 236px, а у
+   «Уровней» меню нет — без этого всё уезжало в узкую колонку (та же ошибка,
+   что была в шахматах и медиа). */
+.levels-body { overflow: hidden; }
+.levels-app {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.levels-content {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  overflow-y: auto;
+  padding: 16px 20px 8px;
+}
+.levels-right { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+.portrait {
+  border: 1px solid var(--line);
+  padding: 10px;
+  text-align: center;
+  background:
+    radial-gradient(circle at 50% 28%, rgba(176, 38, 255, 0.24), transparent 66%),
+    #0d0718;
+}
+.portrait img {
+  width: 100%;
+  max-height: 296px;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 0 18px rgba(176, 38, 255, 0.5));
+}
+.portrait-caption {
+  margin-top: 10px;
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* Шапка уровня: большой зелёный квадрат с цифрой и полоса опыта справа. */
+.level-head { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 14px; }
+.level-head-text { min-width: 0; }
+.level-label {
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.level-badge {
+  display: grid;
+  place-items: center;
+  min-height: 84px;
+  font-family: "Consolas", monospace;
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--bg);
+  background: var(--green);
+  box-shadow: 0 0 26px rgba(40, 255, 150, 0.4);
+  clip-path: polygon(0 0, 100% 0, 100% 86%, 88% 100%, 0 100%);
+}
+
+/* Награды за следующий уровень — две плашки в ряд. */
+.reward-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.reward {
+  font-family: "Consolas", monospace;
+  font-size: 12px;
+  padding: 9px 12px;
+  color: var(--muted);
+  border: 1px solid var(--line-bright);
+  background: rgba(21, 12, 36, 0.75);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+}
+
+/* Радость и усталость рядом, как на макете. */
+.mood-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.mood-cell { min-width: 0; }
+.mood-name {
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.mood-value {
+  float: right;
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  color: var(--text);
+}
+
+.section-title {
+  font-family: "Consolas", monospace;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-top: 4px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--line);
+}
+.section-title .dim { letter-spacing: 0.4px; text-transform: none; }
+
+/* Скины: плашки, надетый — зелёный. */
+.skin-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.skin {
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  letter-spacing: 0.8px;
+  padding: 8px 16px;
+  color: var(--muted);
+  border: 1px solid var(--line-bright);
+  background: rgba(21, 12, 36, 0.8);
+  clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+}
+.skin.is-on {
+  color: var(--green);
+  border-color: var(--green);
+  background: rgba(40, 255, 150, 0.1);
+}
+
+.level-number {
+  font-family: "Consolas", monospace;
+  font-size: 30px;
+  line-height: 1.1;
+  color: var(--text);
+}
+.bar {
+  height: 10px;
+  background: #1d1130;
+  overflow: hidden;
+  margin: 8px 0 6px;
+}
+.bar > i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--violet), var(--green));
+  box-shadow: 0 0 14px rgba(40, 255, 150, 0.45);
+}
+.bar.mood > i { background: linear-gradient(90deg, var(--violet), var(--pink)); }
+.bar.mood.tired > i { background: linear-gradient(90deg, #6c2bd9, #8a7aa6); }
+.bar-caption {
+  display: flex;
+  justify-content: space-between;
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.6px;
+}
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.stat {
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+  background: rgba(21, 12, 36, 0.72);
+}
+.stat b {
+  display: block;
+  font-family: "Consolas", monospace;
+  font-size: 20px;
+  color: var(--text);
+}
+.stat span { font-size: 11px; color: var(--muted); letter-spacing: 0.5px; }
+.inventory { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.item {
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-bright);
+  color: var(--green);
+}
+.empty { color: var(--muted); font-size: 12px; font-style: italic; }
+
+/* -------------------------------------------------------------------- Медиа */
+
+/* Виджет ниже панелей — окно у него маленькое и вертикальное. */
+/* Медиа-виджет и шахматы — без левого меню, поэтому колонка одна.
+   Без этого правила `.app` оставлял их в узкой 236-пиксельной колонке. */
+.media-body { overflow: hidden; }
+.media-app {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.media-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px 10px;
+  overflow: hidden;
+}
+
+/* Шапка виджета: «СЕЙЧАС ИГРАЕТ» слева, источник справа.
+   На макете шапки CAPRI нет вовсе — это карточка поверх стола. */
+.media-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.media-now {
+  font-family: "Consolas", monospace;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--green);
+  text-shadow: 0 0 12px rgba(40, 255, 150, 0.45);
+}
+.media-source {
+  margin-left: auto;
+  font-family: "Consolas", monospace;
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.media-row { display: flex; gap: 12px; align-items: center; min-width: 0; }
+
+.cover {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  flex: none;
+  border: 1px solid var(--line-bright);
+  background: #0d0718;
+  overflow: hidden;
+}
+.cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.cover-fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(176, 38, 255, 0.28), transparent 68%),
+    #0d0718;
+}
+/* Кружок-пластинка: дешёвая заглушка вместо пустого квадрата. */
+.cover-disc {
+  width: 58%;
+  height: 58%;
+  border-radius: 50%;
+  border: 1px solid var(--violet);
+  box-shadow:
+    inset 0 0 0 8px rgba(10, 6, 18, 0.9),
+    inset 0 0 0 9px rgba(176, 38, 255, 0.35),
+    0 0 26px rgba(176, 38, 255, 0.45);
+  animation: spin 7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.cover-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 30px rgba(176, 38, 255, 0.25);
+}
+
+.track { min-width: 0; flex: 1; }
+.track-title {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.2px;
+  /* Длинные названия обрезаем, а не ломаем вёрстку. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.track-artist {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.track-state {
+  margin-top: 7px;
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: var(--green);
+}
+
+/* Эквалайзер: 16 полос, растут снизу. */
+.equalizer {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 62px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(176, 38, 255, 0.06), transparent 60%),
+    rgba(13, 7, 24, 0.75);
+}
+.equalizer i {
+  flex: 1;
+  min-width: 2px;
+  height: 3%;
+  background: linear-gradient(180deg, var(--green), var(--violet));
+  box-shadow: 0 0 10px rgba(40, 255, 150, 0.35);
+  /* Плавнее, чем приходит из аудио, — без дёрганья. */
+  transition: height 70ms linear, opacity 140ms linear;
+  opacity: 0.72;
+}
+.equalizer i.is-hot {
+  opacity: 1;
+  background: linear-gradient(180deg, #ffffff, var(--green));
+  box-shadow: 0 0 14px rgba(40, 255, 150, 0.7);
+}
+
+.timeline { display: flex; align-items: center; gap: 10px; }
+.time {
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  color: var(--muted);
+  width: 40px;
+  text-align: center;
+  flex: none;
+}
+.seek {
+  position: relative;
+  flex: 1;
+  height: 18px;
+  cursor: pointer;
+  /* Сама дорожка тоньше области попадания — мышью попасть проще. */
+  background: linear-gradient(180deg, transparent 44%, #1d1130 44%, #1d1130 56%, transparent 56%);
+}
+.seek:focus-visible { outline: 1px solid var(--green); outline-offset: 3px; }
+.seek-fill {
+  position: absolute;
+  top: 44%;
+  height: 12%;
+  width: 0;
+  background: linear-gradient(90deg, var(--violet), var(--green));
+  box-shadow: 0 0 12px rgba(40, 255, 150, 0.45);
+  pointer-events: none;
+}
+.seek-knob {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  background: var(--green);
+  box-shadow: 0 0 12px rgba(40, 255, 150, 0.85);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+.ctl {
+  min-width: 62px;
+  font-family: "Consolas", monospace;
+  letter-spacing: 1px;
+}
+.ctl-main {
+  min-width: 92px;
+  font-size: 15px;
+  border-color: var(--green);
+  color: var(--green);
+  box-shadow: 0 0 18px rgba(40, 255, 150, 0.16);
+}
+.ctl-main.is-paused { color: var(--violet); border-color: var(--violet); }
+
+.media-phrase {
+  min-height: 18px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--muted);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ Шахматы */
+
+.chess-body { overflow: hidden; }
+/* У настроек и магазина слева меню на 236px, а у шахмат всю ширину занимает
+   доска — иначе она сжимается в узкую колонку. */
+.chess-app {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.chess-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 292px;
+  gap: 16px;
+  padding: 14px 16px;
+  overflow: hidden;
+}
+
+.board-side { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+.board-side > .board-wrap { flex: 1; min-height: 0; }
+
+/* Доска с координатами по краям: сетка «цифры | поле» и «пусто | буквы».
+   Размер доски задаёт высота: она квадратная, а окно панели низкое, поэтому
+   ширину вычисляем из высоты, а не наоборот. */
+.board-wrap {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px auto;
+  grid-template-rows: minmax(0, 1fr) 16px;
+  justify-content: center;
+  column-gap: 6px;
+  row-gap: 4px;
+  min-height: 0;
+}
+
+/* Цифры по центру клеток: полоса совпадает с восемью горизонталями. */
+.board-ranks {
+  grid-row: 1;
+  grid-column: 1;
+  display: grid;
+  grid-template-rows: repeat(8, 1fr);
+  align-items: center;
+  justify-items: end;
+  font-family: "Consolas", monospace;
+  font-size: 10px;
+  color: var(--muted);
+}
+.board-files {
+  grid-row: 2;
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  justify-items: center;
+  align-items: center;
+  font-family: "Consolas", monospace;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* Доска квадратная и вписывается в высоту окна, а не в ширину. */
+.board {
+  grid-row: 1;
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr);
+  aspect-ratio: 1;
+  height: 100%;
+  max-height: 100%;
+  max-width: 100%;
+  border: 1px solid var(--violet-soft);
+  background: var(--bg);
+  box-shadow: 0 0 34px rgba(176, 38, 255, 0.28), inset 0 0 0 1px rgba(176, 38, 255, 0.15);
+}
+/* Плашка «твой ход» / «ход Капри» — крупная, как на макете. */
+.turn-bar {
+  font-family: "Consolas", monospace;
+  font-size: 12px;
+  letter-spacing: 0.8px;
+  padding: 9px 12px;
+  color: var(--muted);
+  border: 1px solid var(--line-bright);
+  background: rgba(21, 12, 36, 0.9);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+}
+.turn-bar.is-mine { color: var(--text); border-color: rgba(40, 255, 150, 0.45); }
+
+/* Кнопки партии: зелёная «Новая партия» и рамка со сложностью. */
+.game-actions { display: grid; grid-template-columns: 1fr 1.25fr; gap: 8px; }
+.btn-play {
+  border-color: var(--green);
+  color: var(--bg);
+  background: var(--green);
+  font-weight: 700;
+  letter-spacing: 1.2px;
+}
+.btn-play:hover:not(:disabled) {
+  color: var(--bg);
+  border-color: var(--green);
+  background: #4dffb0;
+  box-shadow: 0 0 26px rgba(40, 255, 150, 0.55);
+}
+.btn-level { letter-spacing: 1px; font-size: 11px; }
+
+/* Карточка Капри: портрет в рамке и её реплика рядом. */
+.capri-card {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  gap: 12px;
+  align-items: start;
+  margin: 0;
+}
+.capri-face {
+  width: 76px;
+  height: 76px;
+  object-fit: cover;
+  border: 1px solid var(--violet);
+  box-shadow: 0 0 18px rgba(176, 38, 255, 0.4);
+  background: #0d0718;
+}
+.capri-say {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  border-left: 2px solid var(--violet);
+  padding-left: 10px;
+  min-height: 62px;
+}
+
+/* Счёт по партиям — мелкая строка под всем. */
+.score-line {
+  font-family: "Consolas", monospace;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+/* Вкладки игр в шапке — как на макете: три скошенных кнопки. */
+.game-tabs { display: flex; gap: 6px; margin-left: 22px; }
+.game-tab {
+  appearance: none;
+  border: 1px solid var(--line-bright);
+  background: rgba(21, 12, 36, 0.85);
+  color: var(--muted);
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  letter-spacing: 1.4px;
+  padding: 8px 20px;
+  cursor: pointer;
+  clip-path: polygon(var(--skew) 0, 100% 0, calc(100% - var(--skew)) 100%, 0 100%);
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.game-tab:hover { color: var(--text); border-color: var(--violet); }
+.game-tab.is-active {
+  color: var(--bg);
+  background: var(--green);
+  border-color: var(--green);
+  font-weight: 700;
+  box-shadow: 0 0 20px rgba(40, 255, 150, 0.45);
+}
+
+/* Баланс ECS в шапке — золотистый, как на макете. */
+.chip-gold { color: #ffce4d; border-color: rgba(255, 206, 77, 0.45); }
+
+
+.square {
+  position: relative;
+  display: grid;
+  place-items: center;
+  appearance: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  background: #1b1030;
+  font-size: min(4.6vh, 38px);
+  line-height: 1;
+  transition: background 0.12s, box-shadow 0.12s;
+}
+/* Светлые поля — не белые: интерфейс тёмный, поэтому «светлое» это сиреневое. */
+.square.is-dark { background: #241539; }
+
+/* Фигуры: белые светлые, чёрные почти чёрные с фиолетовым ободком. */
+/* Фигуры: свои светлые, чужие — малиновые, как на макете. Раньше чёрные
+   были почти чёрными на тёмной доске и их не было видно. */
+.square.is-white .piece { color: #f4ecff; text-shadow: 0 0 10px rgba(232, 221, 247, 0.45); }
+.square.is-black .piece { color: #ff2e63; text-shadow: 0 0 2px #ff2e63, 0 0 10px rgba(255, 34, 96, 0.7); }
+
+.square:hover { background: #33204d; }
+.square.is-selected {
+  background: rgba(40, 255, 150, 0.24);
+  box-shadow: inset 0 0 0 2px var(--green);
+}
+/* Доступный ход: точка в центре поля. */
+.square.is-target::after {
+  content: "";
+  position: absolute;
+  width: 22%;
+  height: 22%;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 12px rgba(40, 255, 150, 0.85);
+  pointer-events: none;
+}
+/* Если на поле стоит чужая фигура, точка не нужна — рамка читается лучше. */
+.square.is-target:has(.piece:not(:empty))::after {
+  width: 82%;
+  height: 82%;
+  border-radius: 0;
+  background: transparent;
+  border: 2px solid var(--green);
+}
+.square.is-last { box-shadow: inset 0 0 0 2px rgba(176, 38, 255, 0.55); }
+.square.is-check {
+  background: rgba(255, 34, 96, 0.3);
+  box-shadow: inset 0 0 0 2px var(--pink), 0 0 18px rgba(255, 34, 96, 0.5);
+}
+
+.board-banner {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-family: "Consolas", monospace;
+  font-size: 15px;
+  letter-spacing: 3px;
+  padding: 10px 20px;
+  color: var(--bg);
+  background: var(--green);
+  box-shadow: 0 0 40px rgba(40, 255, 150, 0.6);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.board-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.6px;
+}
+.board-bar .spacer { flex: 1; }
+.material { color: var(--text); }
+
+.side-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; overflow: hidden; }
+.side-panel .card { margin: 0; }
+
+.comment-card .comment {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+  font-style: italic;
+  border-left: 2px solid var(--violet);
+  padding-left: 10px;
+  min-height: 52px;
+}
+
+.moves-card { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.move-list {
+  margin: 0;
+  padding-left: 26px;
+  overflow-y: auto;
+  max-height: 100%;
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.move-list li { white-space: nowrap; }
+.move-list li:last-child { color: var(--green); }
+
+.select {
+  appearance: none;
+  font-family: "Consolas", monospace;
+  font-size: 12px;
+  padding: 6px 10px;
+  color: var(--text);
+  background: rgba(21, 12, 36, 0.95);
+  border: 1px solid var(--line-bright);
+  cursor: pointer;
+}
+.select:focus-visible { outline: 1px solid var(--green); outline-offset: 2px; }
+
+
+/* ---------------------------------------------------------------------- Чат */
+
+/* Чат — одна колонка без левого меню (та же оговорка, что у шахмат). */
+.chat-body { overflow: hidden; }
+.chat-app {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+/* Имя локальной модели бывает в полсотни символов («qwen3.5-9b-…-imatrix-max-mtp»),
+   и в шапке оно ломало сетку на три строки. Обрезаем с многоточием, полный
+   текст остаётся в подсказке при наведении. */
+.chat-app .brand-sub,
+.chat-app .chip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-app .brand-sub { max-width: 360px; }
+.chat-app #chip-model { max-width: 260px; }
+.chat-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.chat-feed {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 6px 4px 2px;
+  scroll-behavior: smooth;
+}
+
+/* Пустая история — подсказка по центру, а не пустое окно. */
+.chat-empty {
+  margin: auto;
+  text-align: center;
+  max-width: 420px;
+  padding: 24px;
+}
+.chat-empty-title {
+  font-family: "Consolas", monospace;
+  font-size: 12px;
+  letter-spacing: 1.6px;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.chat-empty-hint { font-size: 13px; line-height: 1.6; color: var(--muted); }
+
+/* Пузырь сообщения. Свои справа и зелёным краем, ответы Капри слева и
+   фиолетовым — по тому же принципу, что её свечение в интерфейсе. */
+.msg {
+  max-width: min(78%, 620px);
+  padding: 10px 13px;
+  border: 1px solid var(--line-bright);
+  background: rgba(21, 12, 36, 0.92);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%);
+}
+.msg.is-mine {
+  align-self: flex-end;
+  border-color: rgba(40, 255, 150, 0.4);
+  background: rgba(40, 255, 150, 0.08);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 9px 100%, 0 calc(100% - 9px));
+}
+.msg.is-capri {
+  align-self: flex-start;
+  border-color: rgba(176, 38, 255, 0.42);
+  box-shadow: 0 0 18px rgba(176, 38, 255, 0.14);
+}
+
+.msg-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 5px;
+}
+.msg-who {
+  font-family: "Consolas", monospace;
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+}
+.msg.is-mine .msg-who { color: var(--green); }
+.msg.is-capri .msg-who { color: var(--violet); }
+.msg-time { font-family: "Consolas", monospace; font-size: 10px; color: var(--muted); }
+.msg-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.msg-note {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  font-family: "Consolas", monospace;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* «Печатает…» — три точки, чтобы было видно, что ответ в пути. */
+.chat-typing {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-left: 4px;
+}
+.chat-typing[hidden] { display: none; }
+.chat-typing .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--violet);
+  animation: chat-blink 1.2s infinite ease-in-out;
+}
+.chat-typing .dot:nth-child(2) { animation-delay: 0.2s; }
+.chat-typing .dot:nth-child(3) { animation-delay: 0.4s; }
+.chat-typing-label {
+  margin-left: 6px;
+  font-family: "Consolas", monospace;
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+@keyframes chat-blink {
+  0%, 100% { opacity: 0.25; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-2px); }
+}
+
+/* Поле ввода: растёт под текст, Enter отправляет. */
+.chat-compose { display: flex; gap: 8px; align-items: flex-end; }
+.chat-input {
+  flex: 1;
+  min-height: 42px;
+  max-height: 110px;
+  resize: none;
+  padding: 11px 13px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+  background: rgba(13, 7, 24, 0.95);
+  border: 1px solid var(--line-bright);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%);
+}
+.chat-input::placeholder { color: var(--muted); }
+.chat-input:focus-visible {
+  outline: none;
+  border-color: rgba(40, 255, 150, 0.55);
+  box-shadow: 0 0 18px rgba(40, 255, 150, 0.18);
+}
+.btn-send {
+  flex: none;
+  width: 56px;
+  height: 42px;
+  border-color: var(--green);
+  color: var(--bg);
+  background: var(--green);
+  font-size: 16px;
+  font-weight: 700;
+}
+.btn-send:hover:not(:disabled) {
+  color: var(--bg);
+  border-color: var(--green);
+  background: #4dffb0;
+  box-shadow: 0 0 26px rgba(40, 255, 150, 0.55);
+}
+
+/* Кнопка-плашка «Очистить» в шапке — chip, но кликабельный. */
+.chip-btn {
+  appearance: none;
+  cursor: pointer;
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  letter-spacing: 1px;
+  padding: 5px 10px;
+  border: 1px solid var(--line-bright);
+  background: rgba(10, 6, 18, 0.6);
+  color: var(--muted);
+  clip-path: polygon(8px 0, 100% 0, 100% 100%, 0 100%, 0 8px);
+}
+.chip-btn:hover { color: var(--green); border-color: var(--green); }
+
+
+/* ----------------------------------------------------------------- Терминал */
+
+/* Одна колонка: у терминала нет левого меню (та же оговорка, что у шахмат). */
+.term-body { overflow: hidden; }
+.term-app {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.term-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Плашка «ЗАПУСКАЕТ» — видна, только пока команда идёт. */
+.term-running {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid rgba(176, 38, 255, 0.5);
+  background: rgba(176, 38, 255, 0.1);
+  box-shadow: 0 0 20px rgba(176, 38, 255, 0.16);
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+}
+.term-running[hidden] { display: none; }
+.term-running-label {
+  flex: none;
+  font-family: "Consolas", monospace;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--violet);
+}
+.term-running-cmd {
+  flex: 1;
+  font-family: "Consolas", monospace;
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Вращающийся квадратик: рисуется средствами CSS, без картинок. */
+.term-spinner {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--violet);
+  border-top-color: transparent;
+  animation: term-spin 0.8s linear infinite;
+}
+@keyframes term-spin { to { transform: rotate(360deg); } }
+
+.term-feed {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: rgba(6, 3, 12, 0.75);
+  font-family: "Consolas", monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  scroll-behavior: smooth;
+}
+.term-line { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
+/* Цвет строки выбирает ядро (`capri_core::exec::classify`), страница берёт готовый. */
+.term-line.is-ok { color: var(--green); }
+.term-line.is-fail { color: #ff5c7a; }
+.term-line.is-info { color: var(--violet); }
+.term-line.is-stderr { opacity: 0.92; }
+
+.term-empty { margin: auto; text-align: center; max-width: 420px; padding: 24px; }
+.term-empty-title {
+  font-family: "Consolas", monospace;
+  font-size: 12px;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.term-empty-hint { font-size: 13px; line-height: 1.6; color: var(--muted); }
+
+.term-compose { display: flex; gap: 8px; align-items: center; }
+.term-prompt {
+  flex: none;
+  font-family: "Consolas", monospace;
+  font-size: 13px;
+  color: var(--violet);
+}
+.term-input {
+  flex: 1;
+  padding: 11px 12px;
+  font-family: "Consolas", monospace;
+  font-size: 13px;
+  color: var(--text);
+  background: rgba(13, 7, 24, 0.95);
+  border: 1px solid var(--line-bright);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%);
+}
+.term-input::placeholder { color: var(--muted); }
+.term-input:focus-visible {
+  outline: none;
+  border-color: rgba(40, 255, 150, 0.55);
+  box-shadow: 0 0 18px rgba(40, 255, 150, 0.16);
+}
+.term-compose .btn-send { width: 48px; height: 42px; }
+.btn-main {
+  flex: none;
+  height: 42px;
+  padding: 0 14px;
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+/* --------------------------------------------------------------- перевод */
+
+/* Окно узкое (560px), поэтому колонки идут друг под другом: рядом текст
+   распознавания и перевод не помещаются и оба становятся нечитаемыми. */
+.tr-body { overflow: hidden; }
+.tr-app {
+  grid-template-columns: 1fr;
+  grid-template-rows: 66px 1fr 34px;
+}
+
+.tr-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding: 14px 16px 10px;
+}
+
+/* Шапка узкой панели: заголовок и подпись не должны переноситься — окно
+   шириной 560px иначе ломает «CAPRI // ПЕРЕВОД» на три строки. */
+.tr-app .brand-title {
+  font-size: 13px;
+  letter-spacing: 1.6px;
+  white-space: nowrap;
+}
+.tr-app .brand-sub {
+  font-size: 10px;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 190px;
+}
+.tr-app .chips { gap: 5px; }
+.tr-app .chip { padding: 4px 7px; font-size: 10px; letter-spacing: 0.5px; }
+
+/* Кнопка выделения: крупная, с подсказкой — это главное действие экрана. */
+.tr-pick {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 14px 16px;
+  text-align: left;
+  color: var(--text);
+  background: linear-gradient(135deg, rgba(176, 38, 255, 0.16), rgba(40, 255, 150, 0.07));
+  border: 1px solid var(--line-bright);
+  cursor: pointer;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.tr-pick:hover:not(:disabled) {
+  border-color: var(--violet);
+  box-shadow: 0 0 22px rgba(176, 38, 255, 0.28);
+}
+.tr-pick:disabled { opacity: 0.45; cursor: not-allowed; }
+.tr-pick-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  font-size: 20px;
+  color: var(--violet);
+  border: 1px dashed rgba(176, 38, 255, 0.6);
+}
+.tr-pick-text { display: flex; flex-direction: column; gap: 3px; }
+.tr-pick-title {
+  font-family: "Consolas", monospace;
+  font-size: 12px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--green);
+}
+.tr-pick-hint { font-size: 12px; color: var(--muted); }
+
+/* Прогресс. */
+.tr-busy {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  background: rgba(21, 12, 36, 0.7);
+}
+.tr-busy[hidden] { display: none; }
+.tr-spinner {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(40, 255, 150, 0.25);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: tr-spin 0.8s linear infinite;
+}
+@keyframes tr-spin { to { transform: rotate(360deg); } }
+
+/* Ошибка: красная рамка и читаемый текст, а не «что-то пошло не так». */
+.tr-error {
+  flex: none;
+  padding: 11px 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #ff8ba3;
+  border: 1px solid rgba(255, 34, 96, 0.5);
+  background: rgba(255, 34, 96, 0.08);
+}
+.tr-error[hidden] { display: none; }
+
+/* Две области текста. */
+.tr-columns { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.tr-columns[hidden] { display: none; }
+.tr-pane { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.tr-pane-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: "Consolas", monospace;
+  font-size: 10px;
+  letter-spacing: 1.3px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tr-pane-title .chip-btn { margin-left: auto; padding: 2px 8px; font-size: 10px; }
+.tr-text {
+  padding: 10px 12px;
+  /* Перевод — главное, ему больше места; исходник виден частично. */
+  max-height: 150px;
+  min-height: 44px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  background: rgba(13, 7, 24, 0.9);
+  border: 1px solid var(--line);
+  user-select: text;
+}
+/* Перевод — главное на экране, поэтому он светлее и с зелёной рамкой. */
+.tr-text-out {
+  color: var(--text);
+  border-color: rgba(40, 255, 150, 0.35);
+  background: rgba(40, 255, 150, 0.05);
+}
+
+/* Пустое состояние. */
+.tr-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  padding: 12px;
+}
+.tr-empty[hidden] { display: none; }
+.tr-empty-title {
+  font-family: "Consolas", monospace;
+  font-size: 12px;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tr-empty-hint { font-size: 12px; line-height: 1.6; color: var(--muted); }
+
+/* Пока показан результат, пустая подсказка не нужна, но и место ей не
+   выделяем: иначе внизу остаётся тёмная полоса «ни на что не похожая». */
+.tr-columns:not([hidden]) ~ .tr-empty { display: none; }
+

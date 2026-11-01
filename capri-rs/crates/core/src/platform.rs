@@ -41,6 +41,36 @@ pub struct InstalledProgram {
     pub target: String,
 }
 
+/// Монитор: где он в общих координатах и как его звать.
+///
+/// Координаты — физические пиксели, как их понимает `SetWindowPos`: левый
+/// верхний угол может быть отрицательным (монитор левее основного).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MonitorInfo {
+    /// Номер по порядку, начиная с основного.
+    pub index: u32,
+    /// Имя устройства, как его называет Windows: `\\.\DISPLAY1`.
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub primary: bool,
+}
+
+impl MonitorInfo {
+    /// Подпись для списка в настройках: «Монитор 1 — 2560×1440 (основной)».
+    pub fn label(&self) -> String {
+        format!(
+            "Монитор {} — {}×{}{}",
+            self.index + 1,
+            self.width,
+            self.height,
+            if self.primary { " (основной)" } else { "" }
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaCommand {
     PlayPause,
@@ -165,6 +195,12 @@ pub trait Platform: Send + Sync {
     fn set_brightness(&self, percent: u8) -> Res<()> {
         let _ = percent;
         Err("яркость недоступна".into())
+    }
+
+    // ---------- экран ----------
+    /// Все мониторы, основной — первым.
+    fn monitors(&self) -> Vec<MonitorInfo> {
+        Vec::new()
     }
 
     // ---------- окна ----------

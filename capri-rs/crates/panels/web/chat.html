@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>CAPRI // ЧАТ</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body class="chat-body">
+  <div class="app chat-app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="glyph" aria-hidden="true"></div>
+        <div>
+          <div class="brand-title">CAPRI <span class="slash">//</span> ЧАТ</div>
+          <div class="brand-sub" id="brain-line">мозги: —</div>
+        </div>
+      </div>
+      <div class="chips">
+        <span class="chip" id="chip-model">модель: —</span>
+        <span class="chip chip-green" id="chip-state">на связи</span>
+        <button class="chip chip-btn" data-action="clear">Очистить</button>
+      </div>
+    </header>
+
+    <main class="content chat-content">
+      <!-- Лента сообщений. Пустая история показывает подсказку, а не
+           пустое окно: чат должен объяснять, что с ним делать. -->
+      <div class="chat-feed" id="feed" role="log" aria-live="polite">
+        <div class="chat-empty" id="empty">
+          <div class="chat-empty-title">Ещё не разговаривали</div>
+          <div class="chat-empty-hint">
+            Напиши что-нибудь — или спроси, на какой модели я работаю.
+            Всё останется здесь после перезапуска.
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-typing" id="typing" hidden>
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="chat-typing-label">Капри печатает…</span>
+      </div>
+
+      <div class="chat-compose">
+        <textarea class="chat-input" id="input" rows="1"
+                  placeholder="Напиши Капри… (Enter — отправить, Shift+Enter — новая строка)"
+                  aria-label="Сообщение"></textarea>
+        <button class="btn btn-send" id="send" data-action="send" aria-label="Отправить">➤</button>
+      </div>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status-text" class="dim">запуск…</span>
+      <span class="spacer"></span>
+      <span class="dim" id="chat-hint">Enter — отправить · Shift+Enter — новая строка</span>
+    </footer>
+  </div>
+
+  <script src="bridge.js"></script>
+  <script src="chat.js"></script>
+</body>
+</html>

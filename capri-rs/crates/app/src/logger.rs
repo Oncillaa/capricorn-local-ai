@@ -97,9 +97,17 @@ mod tests {
 
     #[test]
     fn writes_through_the_log_crate() {
-        let dir = std::env::temp_dir().join("capri-log-test");
+        // В `target/`, а не в системном `Temp`: в урезанных окружениях запись
+        // в `%TEMP%` запрещена, и тест падал бы на создании каталога.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("target")
+            .join("test-tmp")
+            .join(format!("log-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::create_dir_all(&dir);
+        std::fs::create_dir_all(&dir)
+            .unwrap_or_else(|e| panic!("каталог {} не создался: {e}", dir.display()));
         init(&dir, false);
         log::info!("проверка связи");
         let text = std::fs::read_to_string(dir.join("capri.log")).unwrap_or_default();

@@ -90,14 +90,41 @@ pub fn spawn_detached(program: &str, args: &[&str]) -> Result<(), String> {
 }
 
 /// RAII-обёртка инициализации COM для текущего потока.
+///
+/// Инициализирует COM **один раз на поток** и намеренно никогда не
+/// освобождает его обратно. Это не забывчивость, а осознанное решение:
+///
+/// * `windows`-rs кэширует фабрики активации WinRT в статических переменных.
+///   После `CoUninitialize` эти указатели становятся висячими, и следующее
+///   обращение к `Windows.Media.Ocr` падает с нарушением доступа — причём не
+///   сразу, а на второй попытке, что особенно неприятно отлаживать.
+/// * Апартамент привязан к потоку: когда поток завершается, Windows снимает его
+///   сама. Для долгоживущего процесса цена «не отпустили» — несколько байт.
+///
+/// Поэтому тип нужен только ради выразительности: он показывает, что поток
+/// готов к COM, и не делает ничего при разрушении.
 pub struct Com;
+
+thread_local! {
+    /// Инициализирован ли COM в этом потоке.
+    static COM_READY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 impl Com {
     pub fn init() -> Self {
-        #[cfg(windows)]
-        unsafe {
-            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
-            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let was_ready = COM_READY.with(|ready| {
+            let was = ready.get();
+            ready.set(true);
+            was
+        });
+        if !was_ready {
+            #[cfg(windows)]
+            unsafe {
+                use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+                // `RPC_E_CHANGED_MODE` — поток уже в другом апартаменте; это не
+                // ошибка для нас, работать можно и так.
+                let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            }
         }
         Com
     }
@@ -105,9 +132,6 @@ impl Com {
 
 impl Drop for Com {
     fn drop(&mut self) {
-        #[cfg(windows)]
-        unsafe {
-            windows::Win32::System::Com::CoUninitialize();
-        }
+        // Освобождать нельзя: см. комментарий у типа.
     }
 }

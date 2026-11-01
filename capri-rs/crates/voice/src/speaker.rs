@@ -5,8 +5,9 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use capri_core::Config;
 use parking_lot::Mutex;
@@ -18,25 +19,74 @@ use crate::edge;
 const CACHE_MAX_TEXT: usize = 160;
 /// Сколько файлов держим в кэше.
 const CACHE_MAX_FILES: usize = 600;
+/// Сколько не трогать edge-tts после сетевого отказа.
+///
+/// Без этого каждая фраза сначала ждала ответа сети (на плохом канале — секунды),
+/// и всё это время Капри стояла как вкопанная. Лучше сразу говорить другим
+/// голосом, а сеть пощупать через десять минут.
+const EDGE_RETRY_AFTER: Duration = Duration::from_secs(600);
+
+/// Голосовой профиль целиком: меняется из настроек на лету.
+///
+/// Держим одним куском под мьютексом, а не шестью отдельными атомиками:
+/// иначе панель могла бы выставить новый голос со старой скоростью.
+#[derive(Clone, Debug)]
+pub struct VoiceProfile {
+    pub voice: String,
+    pub rate: String,
+    pub pitch: String,
+    pub lively: bool,
+    pub shift: f32,
+    pub engine: String,
+}
 
 pub struct Speaker {
-    voice: String,
-    rate: String,
-    pitch: String,
-    fx: f32,
-    lively: bool,
-    shift: f32,
-    engine: String,
+    /// Голос, скорость, тембр, живость и движок.
+    profile: Mutex<VoiceProfile>,
+    /// Сила цифровых эффектов голоса (атомарно: меняется из панели на лету).
+    fx: AtomicU32,
     volume: AtomicU8,
     stop: Arc<AtomicBool>,
     cache_dir: PathBuf,
+    /// Где SAPI может писать промежуточный WAV.
+    ///
+    /// Ей нельзя во всё подряд: на этой машине `ISpeechFileStream` отказывается
+    /// открывать файлы вне каталога программы (`0x80070057`), хотя обычная
+    /// запись туда работает. Поэтому сначала каталог программы, потом кэш.
+    work_dirs: Vec<PathBuf>,
     last_error: Mutex<Option<String>>,
+    /// До какого момента edge-tts считается недоступным.
+    edge_down_until: Mutex<Option<Instant>>,
+    /// До какого момента не пробуем сетевой голос через Python.
+    py_down_until: Mutex<Option<Instant>>,
 }
 
 impl Speaker {
-    pub fn new(cfg: &Config, cache_root: &Path) -> Self {
-        let cache_dir = cache_root.join("tts-cache");
-        let _ = std::fs::create_dir_all(&cache_dir);
+    /// `cache_root` — где держать кэш озвучки, `work_dir` — каталог программы
+    /// (там SAPI пишет промежуточный WAV; `None` — только кэш).
+    pub fn new(cfg: &Config, cache_root: &Path, work_dir: Option<&Path>) -> Self {
+        // Кэш по умолчанию в `%LOCALAPPDATA%\Capri`, но писать туда можно не
+        // всегда (на этой машине — «отказано в доступе»). Тогда держим кэш
+        // рядом с программой: озвучка не должна зависеть от прав на AppData.
+        let mut cache_dir = cache_root.join("tts-cache");
+        if !dir_writable(&cache_dir) {
+            if let Some(dir) = work_dir {
+                let alternative = dir.join("tts-cache");
+                if dir_writable(&alternative) {
+                    log::info!(
+                        "Кэш озвучки: {} недоступен, держу рядом с программой ({})",
+                        cache_dir.display(),
+                        alternative.display()
+                    );
+                    cache_dir = alternative;
+                }
+            }
+        }
+        let mut work_dirs: Vec<PathBuf> = Vec::new();
+        if let Some(dir) = work_dir {
+            work_dirs.push(dir.to_path_buf());
+        }
+        work_dirs.push(cache_dir.clone());
         // Громкость 0 — это почти всегда старая ошибка (в Python-версии такой
         // ноль попадал в config.json, и Капри говорила в полной тишине).
         // Молчать «по настройке» пользователь может и громкостью 1.
@@ -49,7 +99,10 @@ impl Speaker {
         } else {
             cfg.voice_volume
         };
-        if cfg.tts_engine != "edge" && cfg.tts_engine != "sapi" {
+        // Конфиг чинит незнакомый движок сам (`Config::load`), но сюда профиль
+        // может прийти и напрямую — например, из панели настроек. Тогда честно
+        // предупреждаем один раз и говорим через edge, а не молчим.
+        if !capri_core::config::TTS_ENGINES.contains(&cfg.tts_engine.as_str()) {
             log::warn!(
                 "tts_engine = «{}» не поддерживается, использую «edge» \
                  (с запасным голосом Windows).",
@@ -57,19 +110,143 @@ impl Speaker {
             );
         }
         Self {
-            voice: cfg.voice.clone(),
-            rate: cfg.voice_rate.clone(),
-            pitch: cfg.voice_pitch.clone(),
-            fx: cfg.voice_fx,
-            lively: cfg.voice_lively,
-            shift: cfg.voice_shift,
-            // Неизвестный движок ведёт себя как edge, а не молчит.
-            engine: if cfg.tts_engine == "sapi" { "sapi".to_string() } else { "edge".to_string() },
+            profile: Mutex::new(VoiceProfile {
+                voice: cfg.voice.clone(),
+                rate: cfg.voice_rate.clone(),
+                pitch: cfg.voice_pitch.clone(),
+                lively: cfg.voice_lively,
+                shift: cfg.voice_shift,
+                // Неизвестный движок ведёт себя как edge, а не молчит.
+                engine: if cfg.tts_engine == "sapi" {
+                    "sapi".to_string()
+                } else {
+                    "edge".to_string()
+                },
+            }),
+            fx: AtomicU32::new(cfg.voice_fx.to_bits()),
             volume: AtomicU8::new(volume),
             stop: Arc::new(AtomicBool::new(false)),
             cache_dir,
+            work_dirs,
             last_error: Mutex::new(None),
+            edge_down_until: Mutex::new(None),
+            py_down_until: Mutex::new(None),
         }
+    }
+
+    /// Текущий голосовой профиль (копия — чтобы не держать мьютекс).
+    pub fn profile(&self) -> VoiceProfile {
+        self.profile.lock().clone()
+    }
+
+    /// Применить настройки голоса из конфига: панель правит файл, а голос
+    /// подхватывает изменения без перезапуска.
+    pub fn apply_profile(&self, cfg: &Config) {
+        let fresh = VoiceProfile {
+            voice: cfg.voice.clone(),
+            rate: cfg.voice_rate.clone(),
+            pitch: cfg.voice_pitch.clone(),
+            lively: cfg.voice_lively,
+            shift: cfg.voice_shift,
+            engine: if cfg.tts_engine == "sapi" {
+                "sapi".to_string()
+            } else {
+                "edge".to_string()
+            },
+        };
+        {
+            let mut guard = self.profile.lock();
+            if guard.voice != fresh.voice
+                || guard.rate != fresh.rate
+                || guard.pitch != fresh.pitch
+                || guard.lively != fresh.lively
+                || (guard.shift - fresh.shift).abs() > f32::EPSILON
+                || guard.engine != fresh.engine
+            {
+                log::info!(
+                    "Голос обновился: {} · скорость {} · тембр {} · {}",
+                    fresh.voice,
+                    fresh.rate,
+                    fresh.pitch,
+                    if fresh.engine == "sapi" { "голос Windows" } else { "сетевой" },
+                );
+            }
+            *guard = fresh;
+        }
+        self.set_fx(cfg.voice_fx);
+        self.set_volume(cfg.voice_volume);
+    }
+
+    /// Сила эффектов голоса, 0.0…1.0.
+    pub fn set_fx(&self, value: f32) {
+        let clamped = value.clamp(0.0, 1.0);
+        self.fx.store(clamped.to_bits(), Ordering::Relaxed);
+    }
+
+    fn fx_value(&self) -> f32 {
+        f32::from_bits(self.fx.load(Ordering::Relaxed))
+    }
+
+    /// Можно ли сейчас пробовать сетевой голос.
+    pub fn edge_available(&self) -> bool {
+        match *self.edge_down_until.lock() {
+            Some(until) => Instant::now() >= until,
+            None => true,
+        }
+    }
+
+    /// Можно ли пробовать сетевой голос через Python-пакет.
+    fn py_edge_available(&self) -> bool {
+        match *self.py_down_until.lock() {
+            Some(until) => Instant::now() >= until,
+            None => true,
+        }
+    }
+
+    /// Python-путь сработал — значит, сеть жива.
+    fn py_edge_ok(&self) {
+        if self.py_down_until.lock().is_some() {
+            log::info!("Сетевой голос через Python снова работает");
+        }
+        *self.py_down_until.lock() = None;
+    }
+
+    /// Python-путь не сработал: не долбим его каждую фразу.
+    fn py_edge_failed(&self, why: &str) {
+        let first = self.py_down_until.lock().is_none();
+        *self.py_down_until.lock() = Some(Instant::now() + EDGE_RETRY_AFTER);
+        if first {
+            log::info!(
+                "Сетевой голос через Python не сработал ({why}) — \
+                 {} минут голос Windows",
+                EDGE_RETRY_AFTER.as_secs() / 60
+            );
+        } else {
+            log::debug!("Сетевой голос через Python всё ещё не работает ({why})");
+        }
+    }
+
+    /// Сеть подвела — запоминаем и не дёргаем её какое-то время.
+    fn edge_failed(&self, why: &str) {
+        let first = self.edge_down_until.lock().is_none();
+        *self.edge_down_until.lock() = Some(Instant::now() + EDGE_RETRY_AFTER);
+        *self.last_error.lock() = Some(why.to_string());
+        if first {
+            log::info!(
+                "edge-tts недоступен ({why}) — {} минут говорю запасным голосом",
+                EDGE_RETRY_AFTER.as_secs() / 60
+            );
+        } else {
+            log::debug!("edge-tts всё ещё недоступен ({why})");
+        }
+    }
+
+    /// Сеть ответила — снимаем запрет.
+    fn edge_ok(&self) {
+        if self.edge_down_until.lock().is_some() {
+            log::info!("edge-tts снова отвечает — возвращаюсь к обычному голосу");
+        }
+        *self.edge_down_until.lock() = None;
     }
 
     /// Произнести текст. Блокирует поток до конца фразы.
@@ -95,26 +272,46 @@ impl Speaker {
             }
         }
 
-        // 2. Edge TTS.
-        if self.engine != "sapi" {
+        // 2. Сетевой голос. Первым — Python-пакет `edge-tts`: у него
+        //    актуальный токен службы, а наш прямой синтез в этой сети получает
+        //    403 и тратит на это секунды. Свой синтез остаётся для машин, где
+        //    питона нет.
+        if self.profile().engine != "sapi" && self.py_edge_available() {
+            match crate::py_edge::synthesize(&text, &self.profile().voice, &self.profile().rate, &self.profile().pitch, &self.work_dirs)
+            {
+                Ok(bytes) => {
+                    self.py_edge_ok();
+                    if let Some(interrupted) = self.finish_render(&text, bytes, volume) {
+                        return interrupted;
+                    }
+                }
+                Err(e) => {
+                    self.py_edge_failed(&e);
+                }
+            }
+        }
+
+        // 2.5. Свой синтез через Edge TTS (если сеть не подводила).
+        if self.profile().engine != "sapi" && self.edge_available() {
             match self.render_edge(&text) {
                 Ok(samples) if !samples.is_empty() => {
-                    let processed = if self.fx > 0.0 {
-                        audio::apply_voice_fx(&samples, audio::FX_SR, self.fx)
+                    self.edge_ok();
+                    let processed = if self.fx_value() > 0.0 {
+                        audio::apply_voice_fx(&samples, audio::FX_SR, self.fx_value())
                     } else {
                         samples
                     };
                     if text.chars().count() <= CACHE_MAX_TEXT {
                         self.store_cache(&text, &processed);
                     }
+                    self.clear_error();
                     return audio::play_samples(processed, audio::FX_SR, volume);
                 }
                 Ok(_) => {
-                    self.set_error("Edge TTS вернул пустой звук");
+                    self.edge_failed("Edge TTS вернул пустой звук");
                 }
                 Err(e) => {
-                    *self.last_error.lock() = Some(e.clone());
-                    log::info!("edge-tts недоступен ({e}), использую голос Windows");
+                    self.edge_failed(&e);
                 }
             }
         }
@@ -125,6 +322,9 @@ impl Speaker {
 
     /// Заготовить фразы заранее, чтобы они звучали мгновенно.
     pub fn prewarm(&self, texts: &[String]) {
+        if !self.edge_available() {
+            return;
+        }
         for text in texts {
             let text = clean_for_speech(text);
             if text.is_empty() || text.chars().count() > CACHE_MAX_TEXT {
@@ -136,14 +336,22 @@ impl Speaker {
             }
             match self.render_edge(&text) {
                 Ok(samples) if !samples.is_empty() => {
-                    let processed = if self.fx > 0.0 {
-                        audio::apply_voice_fx(&samples, audio::FX_SR, self.fx)
+                    self.edge_ok();
+                    let processed = if self.fx_value() > 0.0 {
+                        audio::apply_voice_fx(&samples, audio::FX_SR, self.fx_value())
                     } else {
                         samples
                     };
                     self.store_cache(&text, &processed);
                 }
-                _ => return,
+                Ok(_) => {
+                    self.edge_failed("Edge TTS вернул пустой звук");
+                    return;
+                }
+                Err(e) => {
+                    self.edge_failed(&e);
+                    return;
+                }
             }
             std::thread::sleep(std::time::Duration::from_millis(300));
         }
@@ -166,12 +374,17 @@ impl Speaker {
         *self.last_error.lock() = Some(text.to_string());
     }
 
+    /// Забыть прошлую ошибку: голос ведь получился.
+    fn clear_error(&self) {
+        *self.last_error.lock() = None;
+    }
+
     /// Синтез с «живой» интонацией: по куску на каждое предложение,
     /// со своим сдвигом высоты, склейка через короткие паузы.
     fn render_edge(&self, text: &str) -> Result<Vec<f32>, String> {
         let sentences = split_sentences(text);
-        let semitones = lively_semitones(&sentences, self.shift, self.lively);
-        let base_rate = percent_of(&self.rate);
+        let semitones = lively_semitones(&sentences, self.profile().shift, self.profile().lively);
+        let base_rate = percent_of(&self.profile().rate);
 
         let mut chunks: Vec<f32> = Vec::new();
         let gap = vec![0.0f32; (audio::FX_SR as f32 * 0.13) as usize];
@@ -181,7 +394,7 @@ impl Speaker {
             // Компенсируем сдвиг высоты темпом, чтобы фраза не «жевала».
             let adjusted = base_rate - ((2f32.powf(semis / 12.0) - 1.0) * 100.0);
             let rate = format!("{:+}%", adjusted.round() as i32);
-            let mp3 = edge::synthesize(sentence, &self.voice, &rate, &self.pitch)?;
+            let mp3 = edge::synthesize(sentence, &self.profile().voice, &rate, &self.profile().pitch)?;
             let Ok(decoded) = audio::decode_bytes(&mp3, audio::FX_SR) else {
                 continue;
             };
@@ -197,7 +410,7 @@ impl Speaker {
 
         if !any {
             // Не вышло по предложениям — синтезируем фразу целиком.
-            let mp3 = edge::synthesize(text, &self.voice, &self.rate, &self.pitch)?;
+            let mp3 = edge::synthesize(text, &self.profile().voice, &self.profile().rate, &self.profile().pitch)?;
             return audio::decode_bytes(&mp3, audio::FX_SR);
         }
         Ok(chunks)
@@ -206,35 +419,120 @@ impl Speaker {
     fn cache_path(&self, text: &str) -> PathBuf {
         let mut hasher = DefaultHasher::new();
         text.hash(&mut hasher);
-        self.engine.hash(&mut hasher);
-        self.voice.hash(&mut hasher);
-        self.rate.hash(&mut hasher);
-        self.pitch.hash(&mut hasher);
-        self.fx.to_bits().hash(&mut hasher);
+        self.profile().engine.hash(&mut hasher);
+        self.profile().voice.hash(&mut hasher);
+        self.profile().rate.hash(&mut hasher);
+        self.profile().pitch.hash(&mut hasher);
+        self.fx_value().to_bits().hash(&mut hasher);
         self.volume.load(Ordering::Relaxed).hash(&mut hasher);
-        self.lively.hash(&mut hasher);
-        self.shift.to_bits().hash(&mut hasher);
+        self.profile().lively.hash(&mut hasher);
+        self.profile().shift.to_bits().hash(&mut hasher);
         self.cache_dir.join(format!("{:016x}.wav", hasher.finish()))
     }
 
     fn store_cache(&self, text: &str, samples: &[f32]) {
         let path = self.cache_path(text);
         let volume = self.volume.load(Ordering::Relaxed);
-        if audio::write_wav(&path, samples, audio::FX_SR, volume).is_ok() {
-            trim_cache(&self.cache_dir);
+        match audio::write_wav(&path, samples, audio::FX_SR, volume) {
+            Ok(()) => trim_cache(&self.cache_dir),
+            Err(e) => log::warn!("Кэш озвучки не записался ({}): {e}", path.display()),
         }
     }
 
-    /// Голос Windows через SAPI.
+    /// Голос Windows (SAPI): сначала синтез в файл, потом своё проигрывание.
+    ///
+    /// У SAPI бывает пустая категория звуковых выходов (на этой машине —
+    /// совсем пустая), и тогда `Speak` в устройство сразу падает. Синтез в файл
+    /// работает без звукового устройства, а играем и обрабатываем эффектами мы
+    /// сами — тем же путём, что и сетевой голос.
     fn speak_sapi(&self, text: &str, volume: u8) -> bool {
-        match sapi_speak(text, volume, &self.stop) {
-            Ok(interrupted) => interrupted,
-            Err(e) => {
-                log::warn!("Голос Windows не сработал: {e}");
-                self.set_error(&e);
-                false
+        let russian = self.profile().voice.to_lowercase().contains("ru");
+        let mut rendered: Option<(std::path::PathBuf, Vec<u8>)> = None;
+        let mut problems: Vec<String> = Vec::new();
+        for dir in &self.work_dirs {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                problems.push(format!("{}: каталог не создался ({e})", dir.display()));
+                continue;
+            }
+            let path = dir.join("sapi-phrase.wav");
+            let _ = std::fs::remove_file(&path);
+            match sapi_render_wav(text, russian, volume, &path) {
+                Ok(()) => match std::fs::read(&path) {
+                    Ok(bytes) if bytes.len() > 64 => {
+                        rendered = Some((path, bytes));
+                        break;
+                    }
+                    Ok(bytes) => problems.push(format!(
+                        "{}: запись пустая ({} байт)",
+                        path.display(),
+                        bytes.len()
+                    )),
+                    Err(e) => problems.push(format!("{}: не прочиталась ({e})", path.display())),
+                },
+                Err(e) => {
+                    problems.push(format!("{}: {e}", path.display()));
+                    let _ = std::fs::remove_file(&path);
+                }
             }
         }
+
+        let Some((path, bytes)) = rendered else {
+            // Прямые вызовы SAPI из нашего процесса не сработали — это не
+            // приговор: тот же SAPI из PowerShell пишет нормальную запись.
+            // Синтез в отдельном процессе медленнее, но лучше молчания.
+            log::debug!("SAPI из процесса не смог ({}), пробую PowerShell", problems.join("; "));
+            match crate::ps_sapi::render(text, &self.work_dirs) {
+                Ok(bytes) => {
+                    if let Some(samples) = self.finish_render(text, bytes, volume) {
+                        return samples;
+                    }
+                    return false;
+                }
+                Err(e) => {
+                    let report = problems.join("; ");
+                    log::warn!("Голос Windows не сработал: {report}; через PowerShell: {e}");
+                    let reason = problems
+                        .into_iter()
+                        .next()
+                        .unwrap_or_else(|| "SAPI молчит".into());
+                    self.set_error(&reason);
+                    return false;
+                }
+            }
+        };
+        let _ = std::fs::remove_file(&path);
+
+        match self.finish_render(text, bytes, volume) {
+            Some(interrupted) => interrupted,
+            None => false,
+        }
+    }
+
+    /// Декодировать готовую запись, приправить эффектами и проиграть.
+    ///
+    /// `Some(interrupted)` — проиграли (и, может, перебили), `None` — запись
+    /// не разобралась.
+    fn finish_render(&self, text: &str, bytes: Vec<u8>, volume: u8) -> Option<bool> {
+        let samples = match audio::decode_bytes(&bytes, audio::FX_SR) {
+            Ok(samples) => samples,
+            Err(e) => {
+                log::warn!("Голос Windows: не разобрала запись ({e})");
+                return None;
+            }
+        };
+        if samples.is_empty() {
+            return None;
+        }
+        let processed = if self.fx_value() > 0.0 {
+            audio::apply_voice_fx(&samples, audio::FX_SR, self.fx_value())
+        } else {
+            samples
+        };
+        if text.chars().count() <= CACHE_MAX_TEXT {
+            self.store_cache(text, &processed);
+        }
+        self.clear_error();
+        Some(audio::play_samples(processed, audio::FX_SR, volume))
     }
 }
 
@@ -330,8 +628,22 @@ fn percent_of(value: &str) -> f32 {
     digits.parse().unwrap_or(0.0)
 }
 
-fn touch(path: &Path) {
-    // Обновляем mtime, чтобы старые файлы не вытесняли свежие.
+/// Можно ли писать в каталог: создаём его и пробуем записать файл.
+fn dir_writable(dir: &Path) -> bool {
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(".capri-write-test");
+    match std::fs::write(&probe, b"ok") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn touch(path: &Path) {    // Обновляем mtime, чтобы старые файлы не вытесняли свежие.
     if let Ok(file) = std::fs::OpenOptions::new().append(true).open(path) {
         let _ = file.set_len(std::fs::metadata(path).map(|m| m.len()).unwrap_or(0));
     }
@@ -358,78 +670,88 @@ fn trim_cache(dir: &Path) {
     }
 }
 
-/// Голос Windows (SAPI) — работает всегда, даже без интернета.
-fn sapi_speak(text: &str, volume: u8, stop: &Arc<AtomicBool>) -> Result<bool, String> {
-    #[cfg(windows)]
-    {
-        use windows::core::PCWSTR;
-        use windows::Win32::Media::Speech::{
-            ISpVoice, SPVOICESTATUS, SPF_ASYNC, SPF_PURGEBEFORESPEAK,
-        };
-        use windows::Win32::System::Com::{
-            CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
-        };
+/// Голос Windows (SAPI) — синтез в WAV-файл, без звукового устройства.
+///
+/// Идём тем же путём, что PowerShell: объект `SAPI.SpVoice` + `SpFileStream`.
+/// Прямые вызовы `ISpVoice` в этом окружении не работают (у голоса нет выхода),
+/// а автоматизационные интерфейсы — работают.
+#[cfg(windows)]
+fn sapi_render_wav(
+    text: &str,
+    russian: bool,
+    volume: u8,
+    path: &Path,
+) -> Result<(), String> {
+    use windows::core::GUID;
+    use windows::Win32::Foundation::{VARIANT_FALSE, VARIANT_TRUE};
+    use windows::Win32::Media::Speech::{
+        ISpeechFileStream, ISpeechVoice, SSFMCreateForWrite, SVSFDefault,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+    };
 
-        // {96749377-3391-11D2-9EE3-00C04F797396} — класс голоса Windows (SpVoice).
-        const CLSID_SPVOICE: windows::core::GUID =
-            windows::core::GUID::from_u128(0x96749377_3391_11D2_9EE3_00C04F797396);
-        // SPF_ASYNC | SPF_PURGEBEFORESPEAK: не блокирует поток и перебивает прошлую фразу.
-        let flags = (SPF_ASYNC.0 | SPF_PURGEBEFORESPEAK.0) as u32;
+    // {96749377-3391-11D2-9EE3-00C04F797396} — голос Windows (SpVoice).
+    const CLSID_SPVOICE: GUID = GUID::from_u128(0x96749377_3391_11D2_9EE3_00C04F797396);
+    // {947812B3-2AE1-4644-BA86-9E90DED7EC91} — файловый поток (SpFileStream).
+    const CLSID_SPFILESTREAM: GUID = GUID::from_u128(0x947812B3_2AE1_4644_BA86_9E90DED7EC91);
 
-        /// Строка в UTF-16 с завершающим нулём — так ждёт SAPI.
-        fn wide(text: &str) -> Vec<u16> {
-            text.encode_utf16().chain(std::iter::once(0)).collect()
-        }
-
-        struct Com;
-        impl Drop for Com {
-            fn drop(&mut self) {
-                unsafe { CoUninitialize() };
-            }
-        }
-
-        unsafe {
-            let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            if hr.is_err() {
-                return Err(format!("COM не поднялся: {hr:?}"));
-            }
-            let _com = Com;
-
-            let voice: ISpVoice = CoCreateInstance(&CLSID_SPVOICE, None, CLSCTX_ALL)
-                .map_err(|e| format!("SAPI недоступен: {e}"))?;
-            voice
-                .SetVolume(volume.min(100) as u16)
-                .map_err(|e| format!("SAPI: громкость не ставится: {e}"))?;
-
-            let phrase = wide(text);
-            voice
-                .Speak(PCWSTR(phrase.as_ptr()), flags, None)
-                .map_err(|e| format!("SAPI: не смог заговорить: {e}"))?;
-
-            let silence = wide("");
-            loop {
-                if stop.load(Ordering::Relaxed) {
-                    // Пустая фраза с PURGE — заткнуться немедленно.
-                    let _ = voice.Speak(PCWSTR(silence.as_ptr()), SPF_PURGEBEFORESPEAK.0 as u32, None);
-                    return Ok(true);
-                }
-                let mut status = SPVOICESTATUS::default();
-                if voice.GetStatus(&mut status, std::ptr::null_mut()).is_err() {
-                    return Ok(false);
-                }
-                // 1 — STRS_DONE.
-                if status.dwRunningState == 1 {
-                    return Ok(false);
-                }
-                std::thread::sleep(std::time::Duration::from_millis(40));
-            }
+    struct Com;
+    impl Drop for Com {
+        fn drop(&mut self) {
+            unsafe { CoUninitialize() };
         }
     }
-    #[cfg(not(windows))]
-    {
-        let _ = (text, volume, stop);
-        Err("голос Windows доступен только на Windows".into())
+
+    unsafe {
+        let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        if hr.is_err() {
+            return Err(format!("COM не поднялся: {hr:?}"));
+        }
+        let _com = Com;
+
+        let voice: ISpeechVoice = CoCreateInstance(&CLSID_SPVOICE, None, CLSCTX_ALL)
+            .map_err(|e| format!("SAPI недоступен: {e}"))?;
+        let stream: ISpeechFileStream = CoCreateInstance(&CLSID_SPFILESTREAM, None, CLSCTX_ALL)
+            .map_err(|e| format!("SAPI: файл для записи не создался: {e}"))?;
+
+        // Русский голос, если он в системе есть (804 — код языка ru).
+        if russian {
+            let wanted = windows::core::BSTR::from("Language=804");
+            let empty = windows::core::BSTR::new();
+            if let Ok(list) = voice.GetVoices(&wanted, &empty) {
+                if list.Count().unwrap_or(0) > 0 {
+                    if let Ok(token) = list.Item(0) {
+                        let _ = voice.putref_Voice(&token);
+                    }
+                }
+            }
+        }
+        let _ = voice.SetVolume(volume.min(100) as i32);
+
+        let wide = path.to_string_lossy().to_string();
+        stream
+            .Open(
+                &windows::core::BSTR::from(wide.as_str()),
+                SSFMCreateForWrite,
+                VARIANT_FALSE,
+            )
+            .map_err(|e| format!("SAPI: файл не открылся: {e}"))?;
+        let _ = voice.SetAllowAudioOutputFormatChangesOnNextSet(VARIANT_TRUE);
+        voice
+            .putref_AudioOutputStream(&stream)
+            .map_err(|e| format!("SAPI: запись в файл не принята: {e}"))?;
+        voice
+            .Speak(&windows::core::BSTR::from(text), SVSFDefault)
+            .map_err(|e| format!("SAPI: не смог заговорить: {e}"))?;
+        let _ = stream.Close();
+        Ok(())
     }
+}
+
+#[cfg(not(windows))]
+fn sapi_render_wav(_text: &str, _russian: bool, _volume: u8, _path: &Path) -> Result<(), String> {
+    Err("голос Windows доступен только на Windows".into())
 }
 
 #[cfg(test)]

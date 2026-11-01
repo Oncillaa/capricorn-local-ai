@@ -8,6 +8,8 @@ pub mod audio;
 pub mod edge;
 pub mod google;
 pub mod listener;
+pub mod ps_sapi;
+pub mod py_edge;
 pub mod speaker;
 
 pub use listener::{ListenerHandle, ListenerOptions};

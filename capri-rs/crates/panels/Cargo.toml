@@ -1,0 +1,16 @@
+[package]
+name = "capri-panels"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+
+# Окна панелей и WebView2 — только Windows (как и всё остальное в проекте).
+[target.'cfg(windows)'.dependencies]
+tao = { workspace = true }
+wry = { workspace = true }

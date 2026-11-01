@@ -5,13 +5,20 @@
 
 pub mod ai;
 pub mod appindex;
+pub mod chess;
+pub mod chat;
+pub mod checkers;
 pub mod config;
 pub mod engine;
+pub mod exec;
 pub mod keys;
+pub mod menu;
 pub mod persona;
 pub mod platform;
+pub mod reminders;
 pub mod reply;
 pub mod save;
+pub mod translate;
 pub mod util;
 
 pub use config::Config;

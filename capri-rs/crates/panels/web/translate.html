@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>CAPRI // ПЕРЕВОД</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body class="tr-body">
+  <div class="app tr-app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="glyph" aria-hidden="true"></div>
+        <div>
+          <div class="brand-title">CAPRI <span class="slash">//</span> ПЕРЕВОД</div>
+          <!-- Направление перевода: «English → Русский», как в макете. -->
+          <div class="brand-sub" id="tr-direction">ещё не переводила</div>
+        </div>
+      </div>
+      <div class="chips">
+        <span class="chip" id="tr-provider">—</span>
+        <span class="chip chip-green" id="tr-state">готова</span>
+        <button class="chip chip-btn" data-action="copy" title="Скопировать перевод">Копировать</button>
+      </div>
+    </header>
+
+    <main class="content tr-content">
+      <!-- Кнопка запуска: она же объясняет, что будет дальше. -->
+      <button class="tr-pick" id="tr-pick" data-action="pick">
+        <span class="tr-pick-icon" aria-hidden="true">⬚</span>
+        <span class="tr-pick-text">
+          <span class="tr-pick-title">Выделить область на экране</span>
+          <span class="tr-pick-hint">Обведи текст мышью — переведу его. Esc — отмена.</span>
+        </span>
+      </button>
+
+      <!-- Прогресс: пока идёт распознавание и перевод. -->
+      <div class="tr-busy" id="tr-busy" hidden>
+        <span class="tr-spinner" aria-hidden="true"></span>
+        <span id="tr-busy-text">распознаю…</span>
+      </div>
+
+      <!-- Ошибка: показываем и причину, и что делать. -->
+      <div class="tr-error" id="tr-error" hidden></div>
+
+      <div class="tr-columns" id="tr-columns" hidden>
+        <section class="tr-pane">
+          <div class="tr-pane-title">
+            <span id="tr-from-label">Распознанный текст</span>
+          </div>
+          <div class="tr-text" id="tr-source" role="textbox" aria-readonly="true"></div>
+        </section>
+        <section class="tr-pane tr-pane-out">
+          <div class="tr-pane-title">
+            <span id="tr-to-label">Перевод</span>
+            <button class="chip chip-btn" data-action="again" title="Перевести заново, минуя кэш">Ещё раз</button>
+          </div>
+          <div class="tr-text tr-text-out" id="tr-target" role="textbox" aria-readonly="true"></div>
+        </section>
+      </div>
+
+      <div class="tr-empty" id="tr-empty">
+        <div class="tr-empty-title">Пока пусто</div>
+        <div class="tr-empty-hint">
+          Выдели область с текстом — Капри распознает его и переведёт.
+          Работает и с картинками, и с окнами, где текст нельзя скопировать.
+        </div>
+      </div>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status-text" class="dim">готова</span>
+      <span class="spacer"></span>
+      <span class="dim" id="tr-language-hint">язык выбирается в настройках</span>
+    </footer>
+  </div>
+
+  <script src="bridge.js"></script>
+  <script src="translate.js"></script>
+</body>
+</html>

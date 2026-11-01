@@ -5,6 +5,7 @@ members = [
     "crates/win",
     "crates/voice",
     "crates/ui",
+    "crates/panels",
     "crates/app",
 ]
 
@@ -14,7 +15,8 @@ default-members = ["crates/app"]
 [workspace.package]
 version = "2.0.0"
 edition = "2021"
-rust-version = "1.80"
+# 1.85 — требование wry (панели на WebView2); остальным крейтам хватает 1.80.
+rust-version = "1.85"
 license = "MIT"
 authors = ["Капри / community port"]
 
@@ -23,6 +25,11 @@ capri-core = { path = "crates/core" }
 capri-win = { path = "crates/win" }
 capri-voice = { path = "crates/voice" }
 capri-ui = { path = "crates/ui" }
+capri-panels = { path = "crates/panels" }
+
+# Панели: tao — окно и цикл событий, wry — WebView2 внутри окна.
+tao = "0.37"
+wry = "0.57"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -46,6 +53,9 @@ ureq = { version = "3", features = ["json"] }
 dirs = "6"
 sha2 = "0.10"
 base64 = "0.22"
+
+# Шахматы: правила и генерация ходов. MIT, а не GPL — см. ПЛАН.md §3.5.
+cozy-chess = "0.3"
 
 [profile.release]
 opt-level = 3

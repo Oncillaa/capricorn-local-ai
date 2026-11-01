@@ -336,7 +336,16 @@ mod tests {
 
     #[test]
     fn glitch_wav_is_written() {
-        let dir = std::env::temp_dir().join("capri-test-glitch");
+        // В `target/`, а не в системном `Temp`: в урезанных окружениях запись
+        // в `%TEMP%` запрещена, и тест падал бы на создании каталога.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("target")
+            .join("test-tmp")
+            .join(format!("glitch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)
+            .unwrap_or_else(|e| panic!("каталог {} не создался: {e}", dir.display()));
         let path = dir.join("glitch.wav");
         assert!(make_glitch_sound(&path, 80).is_ok());
         let bytes = std::fs::read(&path).expect("файл");

@@ -61,6 +61,34 @@ pub struct Config {
     // --- браузер ---
     pub browser: String,
 
+    // --- клавиши ---
+    /// Горячая клавиша радиального меню, например `Ctrl+Alt+C`.
+    pub hotkey_menu: String,
+
+    // --- вид ---
+    /// Размер Капри в процентах: 100 — как в картинках, 1 — совсем крошка.
+    pub character_scale: u8,
+    /// Живость: `calm`, `normal` или `lively`.
+    pub liveliness: String,
+    /// Номер монитора, на котором живёт Капри (0 — основной).
+    pub monitor_index: u32,
+
+    // --- Discord Rich Presence ---
+    /// Application ID из dev-портала Discord. Пусто — статус не транслируется.
+    pub discord_app_id: String,
+    /// Транслировать ли вообще, что играет (можно выключить, не стирая ID).
+    pub discord_enabled: bool,
+
+    // --- перевод ---
+    /// Язык, на который переводим по умолчанию (`ru`, `en`, …).
+    pub translate_to: String,
+    /// Адрес LibreTranslate, если он есть. Пусто — переводим нейросетью.
+    ///
+    /// Свой сервер хорош тем, что переводит дословно и никуда не отправляет
+    /// текст, если поднят локально. Проверяем его первым: если человек его
+    /// настроил, значит хочет именно его.
+    pub translate_libretranslate_url: String,
+
     // --- пользовательские списки ---
     pub sites: Map,
     pub apps: Map,
@@ -175,7 +203,7 @@ impl Default for Config {
                 .collect(),
             mic_device: None,
             mic_gain: 1.0,
-            mic_sensitivity: 100,
+            mic_sensitivity: 70,
             use_google_stt: false,
             vosk_model: "models/vosk-model-small-ru-0.22".into(),
             listen_window_seconds: 8.0,
@@ -208,6 +236,23 @@ impl Default for Config {
 
             browser: String::new(),
 
+            hotkey_menu: DEFAULT_HOTKEY_MENU.into(),
+
+            // По умолчанию — как раньше: во весь рост и самая живая.
+            character_scale: 100,
+            liveliness: "lively".into(),
+            monitor_index: 0,
+
+            // По умолчанию Rich Presence выключен: без Application ID он всё
+            // равно не поднимется, а пугать человека ошибкой в логе незачем.
+            discord_app_id: String::new(),
+            discord_enabled: false,
+
+            // Перевод: по умолчанию с любого языка на русский, через ту же
+            // нейросеть, что и разговор. LibreTranslate не настроен.
+            translate_to: "ru".into(),
+            translate_libretranslate_url: String::new(),
+
             sites,
             apps,
             app_aliases: aliases,
@@ -218,6 +263,80 @@ impl Default for Config {
             load_warning: None,
         }
     }
+}
+
+/// Границы ползунка «Размер» в настройках.
+pub const SCALE_MIN: u8 = 1;
+pub const SCALE_MAX: u8 = 100;
+
+/// Горячая клавиша меню по умолчанию. `Ctrl+Alt` — потому что эта пара
+/// почти нигде не занята, в отличие от `Ctrl+Shift` (её перехватывают
+/// браузеры и мессенджеры) и `Alt+Tab`-подобных сочетаний.
+pub const DEFAULT_HOTKEY_MENU: &str = "Ctrl+Alt+C";
+
+/// Варианты «живости»: идентификатор для `config.json` и подпись для человека.
+pub const LIVELINESS: [(&str, &str); 3] =
+    [("calm", "Спокойная"), ("normal", "Обычная"), ("lively", "Живая")];
+
+/// Привести размер к допустимому: 1…100.
+pub fn clamp_scale(value: u8) -> u8 {
+    value.clamp(SCALE_MIN, SCALE_MAX)
+}
+
+/// Привести «живость» к известному значению. Незнакомое — «живая»:
+/// лучше слишком живая, чем никакая.
+pub fn normalize_liveliness(value: &str) -> &'static str {
+    let value = value.trim().to_ascii_lowercase();
+    LIVELINESS
+        .iter()
+        .find(|(id, _)| *id == value.as_str())
+        .map(|(id, _)| *id)
+        .unwrap_or("lively")
+}
+
+/// Границы интервала болталки, в минутах.
+pub const CHATTER_MIN_MINUTES: f32 = 1.0;
+pub const CHATTER_MAX_MINUTES: f32 = 120.0;
+
+/// Движки озвучки, которые действительно есть.
+///
+/// `edge` — Microsoft Edge TTS с запасным голосом Windows, `sapi` — только
+/// системный голос. Третьего нет: Silero в проекте не подключён.
+pub const TTS_ENGINES: [&str; 2] = ["edge", "sapi"];
+
+/// Привести движок озвучки к известному значению.
+///
+/// В старых конфигах (и в Python-версии) встречается `silero`, которого никто
+/// не реализовал: голосовой поток писал предупреждение при каждом запуске и
+/// говорил всё равно через `edge`. Молчащая или «странно звучащая» Капри
+/// выглядит как поломка, поэтому незнакомое значение — это `edge`.
+pub fn normalize_tts_engine(value: &str) -> &'static str {
+    let value = value.trim().to_ascii_lowercase();
+    TTS_ENGINES
+        .iter()
+        .find(|id| **id == value.as_str())
+        .copied()
+        .unwrap_or("edge")
+}
+
+/// Порядок в интервале болталки: обе границы в 1…120 минут и `min <= max`.
+///
+/// Ползунки в настройках можно двигать как угодно — в конфиг попадает
+/// осмысленная пара, иначе Капри либо замолчит навсегда, либо заболтает.
+pub fn clamp_chatter_minutes(min: f32, max: f32) -> (f32, f32) {
+    let clean = |value: f32| {
+        if value.is_finite() {
+            value.clamp(CHATTER_MIN_MINUTES, CHATTER_MAX_MINUTES)
+        } else {
+            CHATTER_MIN_MINUTES
+        }
+    };
+    let mut min = clean(min);
+    let mut max = clean(max);
+    if min > max {
+        std::mem::swap(&mut min, &mut max);
+    }
+    (min, max)
 }
 
 impl Config {
@@ -244,19 +363,54 @@ impl Config {
         };
 
         // BOM + возможные «кракозябры» (UTF-8, прочитанный как cp1251).
-        let text = decode_json_bytes(&raw);
+        let (text, decoded_changed) = decode_json_bytes_tracked(&raw);
         if text.trim().is_empty() {
             let _ = cfg.save();
             return cfg;
         }
 
         match serde_json::from_str::<serde_json::Value>(&text) {
-            Ok(serde_json::Value::Object(mut map)) => {
-                map = repair_object(map);
-                let merged = merge_into_defaults(map);
+            Ok(serde_json::Value::Object(map)) => {
+                let before_repair = map.clone();
+                let map = repair_object(map);
+                // Починили в памяти — вернём исправленное на диск. Иначе файл
+                // остаётся испорченным: приложение его понимает, а человек,
+                // открывший config.json, видит «РєР°РїСЂРё» вместо «капри».
+                let needs_rewrite = decoded_changed || map != before_repair;
+                let merged = merge_into_defaults(map.clone());
                 match serde_json::from_value::<Config>(merged) {
                     Ok(mut c) => {
                         c.path = path;
+                        if needs_rewrite {
+                            if let Err(e) = c.write_raw_map(map) {
+                                log::warn!("Не сохранила починенный config.json: {e}");
+                            } else {
+                                log::info!("config.json перезаписан без кракозябр и BOM");
+                            }
+                        }
+                        // Незнакомый движок чиним на месте и записываем обратно:
+                        // иначе предупреждение повторялось бы при каждом старте,
+                        // да и панель настроек показывала бы движок, которого нет.
+                        let fixed = normalize_tts_engine(&c.tts_engine);
+                        if fixed != c.tts_engine.as_str() {
+                            log::warn!(
+                                "tts_engine = «{}» не поддерживается, заменяю на «{fixed}» в config.json",
+                                c.tts_engine
+                            );
+                            c.tts_engine = fixed.to_string();
+                            let _ = c.save();
+                        }
+                        // Язык перевода в старых config.json отсутствует, а
+                        // пустая строка превратилась бы в «переводить некуда».
+                        let target = crate::translate::language(&c.translate_to).code;
+                        if target != c.translate_to {
+                            log::debug!(
+                                "translate_to = «{}» не знаком, перевожу на «{target}»",
+                                c.translate_to
+                            );
+                            c.translate_to = target.to_string();
+                            let _ = c.save();
+                        }
                         return c;
                     }
                     Err(e) => {
@@ -372,13 +526,28 @@ impl Config {
 
 /// Декодировать байты в строку: снимает BOM, чинит «кракозябры».
 pub fn decode_json_bytes(raw: &[u8]) -> String {
-    let raw = raw.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(raw);
-    match std::str::from_utf8(raw) {
-        Ok(s) => repair_mojibake(s),
+    decode_json_bytes_tracked(raw).0
+}
+
+/// То же, но ещё говорит, пришлось ли что-то чинить.
+///
+/// Нужно, чтобы `Config::load` мог вернуть исправленный файл на диск: иначе
+/// «кракозябры» остаются в `config.json` навсегда — приложение их понимает,
+/// а человек, открывший файл руками, видит мусор.
+pub fn decode_json_bytes_tracked(raw: &[u8]) -> (String, bool) {
+    let without_bom = raw.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(raw);
+    let had_bom = without_bom.len() != raw.len();
+    match std::str::from_utf8(without_bom) {
+        Ok(s) => {
+            let fixed = repair_mojibake(s);
+            let changed = had_bom || fixed != s;
+            (fixed, changed)
+        }
         Err(_) => {
             // Файл не в UTF-8 — значит, его писали в cp1251.
-            let (cow, _, _) = encoding_rs::WINDOWS_1251.decode(raw);
-            repair_mojibake(cow.as_ref())
+            let (cow, _, _) = encoding_rs::WINDOWS_1251.decode(without_bom);
+            let fixed = repair_mojibake(cow.as_ref());
+            (fixed, true)
         }
     }
 }
@@ -489,6 +658,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn chatter_interval_is_always_sane() {
+        // Нормальная пара остаётся как есть.
+        assert_eq!(clamp_chatter_minutes(15.0, 40.0), (15.0, 40.0));
+        // Ползунки перепутаны — меняем местами, а не молчим вечно.
+        assert_eq!(clamp_chatter_minutes(40.0, 15.0), (15.0, 40.0));
+        // Границы за пределами — подрезаем.
+        assert_eq!(clamp_chatter_minutes(0.0, 1000.0), (1.0, 120.0));
+        // Мусор вместо числа — начало интервала.
+        assert_eq!(clamp_chatter_minutes(f32::NAN, 10.0), (1.0, 10.0));
+    }
+
+    #[test]
     fn mojibake_is_repaired() {
         assert_eq!(repair_mojibake("РєР°РїСЂРё"), "капри");
         assert_eq!(repair_mojibake("СЋС‚СѓР±"), "ютуб");
@@ -503,5 +684,114 @@ mod tests {
         let back: Config = serde_json::from_str(&json).unwrap();
         assert_eq!(back.wake_words, cfg.wake_words);
         assert_eq!(back.sites.len(), cfg.sites.len());
+        // Новые поля вида должны пережить запись и чтение.
+        assert_eq!(back.character_scale, cfg.character_scale);
+        assert_eq!(back.liveliness, cfg.liveliness);
+        assert_eq!(back.monitor_index, cfg.monitor_index);
+    }
+
+    #[test]
+    fn scale_is_kept_inside_the_slider() {
+        assert_eq!(clamp_scale(0), SCALE_MIN);
+        assert_eq!(clamp_scale(55), 55);
+        assert_eq!(clamp_scale(100), 100);
+        assert_eq!(clamp_scale(250), SCALE_MAX);
+    }
+
+    #[test]
+    fn liveliness_accepts_only_known_values() {
+        assert_eq!(normalize_liveliness("calm"), "calm");
+        assert_eq!(normalize_liveliness(" Normal "), "normal");
+        assert_eq!(normalize_liveliness("LIVELY"), "lively");
+        // Незнакомое — не ошибка: просто самая живая.
+        assert_eq!(normalize_liveliness("нервная"), "lively");
+        assert_eq!(normalize_liveliness(""), "lively");
+    }
+
+    #[test]
+    fn tts_engine_accepts_only_engines_that_exist() {
+        assert_eq!(normalize_tts_engine("edge"), "edge");
+        assert_eq!(normalize_tts_engine(" SAPI "), "sapi");
+        assert_eq!(normalize_tts_engine("Edge"), "edge");
+        // «silero» из старых конфигов и Python-версии никто не реализовал —
+        // это должна быть не ошибка, а тихий переход на edge.
+        assert_eq!(normalize_tts_engine("silero"), "edge");
+        assert_eq!(normalize_tts_engine(""), "edge");
+    }
+
+    /// Временная папка для тестов конфига.
+    ///
+    /// `temp_dir()` может указывать туда, куда писать нельзя (у тестового
+    /// процесса свой `TEMP`), поэтому сначала пробуем системную, а если папку
+    /// создать не удалось — берём каталог текущего теста рядом с крейтом.
+    fn scratch_dir(name: &str) -> std::path::PathBuf {
+        let attempt = std::env::temp_dir().join(name);
+        if std::fs::create_dir_all(&attempt).is_ok() {
+            return attempt;
+        }
+        let local = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(name);
+        std::fs::create_dir_all(&local).expect("не смогла создать папку для теста конфига");
+        local
+    }
+
+    #[test]
+    fn loading_a_config_with_silero_fixes_the_file() {
+        // Ровно баг из BUGS.md: в config.json лежит движок, которого нет.
+        // После загрузки он обязан превратиться в edge и остаться в файле,
+        // иначе предупреждение повторялось бы при каждом запуске.
+        let dir = scratch_dir("capri-tts-engine-test");
+        let path = dir.join("config.json");
+        std::fs::write(&path, r#"{"tts_engine": "silero"}"#).unwrap();
+
+        let cfg = Config::load(&path);
+        assert_eq!(cfg.tts_engine, "edge");
+
+        // Проверяем именно поле `tts_engine`, а не подстроку в файле: рядом
+        // лежит `silero_voice` («kseniya»), и поиск по слову «silero» ловил бы
+        // его вместо движка.
+        let saved = std::fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(
+            parsed.get("tts_engine").and_then(|v| v.as_str()),
+            Some("edge"),
+            "исправленный движок должен попасть в файл: {saved}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn loading_a_mojibake_config_rewrites_the_file() {
+        // Файл после чужой записи в cp1251: приложение такие строки понимает,
+        // но на диске остаётся мусор, и человек, открывший config.json, видит
+        // «РєР°РїСЂРё» вместо «капри». После загрузки файл должен очиститься.
+        let dir = scratch_dir("capri-mojibake-test");
+        let path = dir.join("config.json");
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&[0xEF, 0xBB, 0xBF]); // ещё и BOM
+        raw.extend_from_slice(r#"{"wake_words": ["РєР°РїСЂРё"]}"#.as_bytes());
+        std::fs::write(&path, &raw).unwrap();
+
+        let cfg = Config::load(&path);
+        assert_eq!(cfg.wake_words, vec!["капри".to_string()]);
+
+        let saved = std::fs::read(&path).unwrap();
+        assert_ne!(saved.first(), Some(&0xEF), "BOM должен исчезнуть");
+        let text = String::from_utf8(saved).expect("файл должен остаться в UTF-8");
+        assert!(text.contains("капри"), "починенное слово должно попасть в файл: {text}");
+        assert!(!text.contains("РєР°Рї"), "кракозябры остались в файле: {text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn loading_a_good_config_leaves_the_engine_alone() {
+        let dir = scratch_dir("capri-tts-engine-ok");
+        let path = dir.join("config.json");
+        std::fs::write(&path, r#"{"tts_engine": "sapi"}"#).unwrap();
+
+        let cfg = Config::load(&path);
+        assert_eq!(cfg.tts_engine, "sapi");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

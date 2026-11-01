@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "capri-core"
 version.workspace = true
 edition.workspace = true
@@ -17,4 +17,5 @@ parking_lot = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 ureq = { workspace = true }
+cozy-chess = { workspace = true }
 

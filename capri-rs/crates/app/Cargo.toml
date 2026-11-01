@@ -13,6 +13,7 @@ capri-core = { workspace = true }
 capri-win = { workspace = true }
 capri-voice = { workspace = true }
 capri-ui = { workspace = true }
+capri-panels = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }

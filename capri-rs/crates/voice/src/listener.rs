@@ -27,6 +27,48 @@ pub type TextCallback = Arc<dyn Fn(&str) + Send + Sync>;
 pub type FinalCallback = Arc<dyn Fn(&str, &[i16]) + Send + Sync>;
 pub type ErrorCallback = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// Похоже ли распознанное на шум, а не на фразу.
+///
+/// Маленькая модель Vosk на шипении микрофона выдаёт «бай бай бай бай …» или
+/// «так так так так», и Капри честно пытается на это ответить — вплоть до
+/// поиска в интернете. Настоящая фраза почти всегда разнообразнее: в ней
+/// больше разных слов, а одно и то же слово не идёт подряд десяток раз.
+pub fn looks_like_noise(text: &str) -> bool {
+    let words: Vec<String> = text
+        .split_whitespace()
+        .map(|word| {
+            word.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .filter(|word| !word.is_empty())
+        .collect();
+    if words.is_empty() {
+        return true;
+    }
+    // Короткие команды («настройки», «открой хром») — это не шум.
+    if words.len() <= 2 {
+        return false;
+    }
+    // Одно и то же слово подряд пять и более раз — точно шум.
+    let mut run = 1usize;
+    for pair in words.windows(2) {
+        if pair[0] == pair[1] {
+            run += 1;
+            if run >= 5 {
+                return true;
+            }
+        } else {
+            run = 1;
+        }
+    }
+    // Доля разных слов: у фразы из пяти и более слов она выше половины.
+    let mut unique = words.clone();
+    unique.sort();
+    unique.dedup();
+    let ratio = unique.len() as f32 / words.len() as f32;
+    words.len() >= 5 && ratio < 0.5
+}
+
 #[derive(Clone)]
 pub struct ListenerOptions {
     pub model_dir: PathBuf,
@@ -770,10 +812,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn noise_transcription_is_rejected() {
+        // Живой случай с этой машины: шипение превратилось в «бай бай …».
+        let noise = "бай ".repeat(45);
+        assert!(looks_like_noise(&noise));
+        // И такое тоже: «открой открой открой …».
+        assert!(looks_like_noise("открой открой открой открой открой открой"));
+        // Пустота — тоже шум.
+        assert!(looks_like_noise("   "));
+    }
+
+    #[test]
+    fn real_phrases_are_kept() {
+        assert!(!looks_like_noise("настройки"));
+        assert!(!looks_like_noise("открой хром"));
+        assert!(!looks_like_noise("Капри, какая погода сегодня в Москве"));
+        assert!(!looks_like_noise("поставь музыку на паузу пожалуйста"));
+    }
+
+    #[test]
     fn detects_complete_model() {
-        let dir = std::env::temp_dir().join("capri-test-model");
+        // В `target/`, а не в системном `Temp`: в урезанных окружениях запись
+        // в `%TEMP%` запрещена, и тест падал бы на создании каталога.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("target")
+            .join("test-tmp")
+            .join(format!("model-{}", std::process::id()));
         let am = dir.join("am");
-        std::fs::create_dir_all(&am).expect("каталог");
+        std::fs::create_dir_all(&am)
+            .unwrap_or_else(|e| panic!("каталог {} не создался: {e}", am.display()));
         std::fs::write(am.join("final.mdl"), b"x").expect("файл");
         assert!(model_complete(&dir));
         let _ = std::fs::remove_dir_all(&dir);

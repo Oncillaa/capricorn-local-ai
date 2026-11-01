@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>CAPRI // ИГРЫ - ШАХМАТЫ</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body class="chess-body">
+  <div class="app chess-app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="glyph" aria-hidden="true"></div>
+        <div>
+          <div class="brand-title">CAPRI <span class="slash">//</span> ИГРЫ</div>
+        </div>
+      </div>
+
+      <!-- Три игры, как на макете. Готовы шахматы; остальные честно
+           помечены и открывают заглушку вместо пустого экрана. -->
+      <nav class="game-tabs" role="tablist">
+        <button class="game-tab is-active" role="tab" data-game="chess">ШАХМАТЫ</button>
+        <button class="game-tab" role="tab" data-game="checkers">ШАШКИ</button>
+        <button class="game-tab" role="tab" data-game="ochko">ОЧКО</button>
+      </nav>
+
+      <div class="chips">
+        <span class="chip chip-gold" id="chip-balance">0 ECS</span>
+      </div>
+    </header>
+
+    <main class="content chess-content">
+      <section class="board-side">
+        <div class="board-wrap">
+          <!-- Координаты: цифры слева, буквы снизу — как на бумажной доске. -->
+          <div class="board-ranks" id="board-ranks" aria-hidden="true"></div>
+          <div class="board" id="board" role="grid" aria-label="Шахматная доска"></div>
+          <div class="board-banner" id="banner" hidden></div>
+          <div class="board-files" id="board-files" aria-hidden="true"></div>
+        </div>
+      </section>
+
+      <aside class="side-panel">
+        <!-- Капри и её реплика. Портрет тот же, что в «Уровнях». -->
+        <div class="card capri-card">
+          <img class="capri-face" src="capri.png" alt="Капри">
+          <div class="capri-say" id="comment">Белые твои. Посмотри, на что ты способен, чумба.</div>
+        </div>
+
+        <div class="turn-bar" id="turn-bar">твой ход (белые)</div>
+
+        <div class="game-actions">
+          <button class="btn btn-play" data-action="new-game">НОВАЯ ПАРТИЯ</button>
+          <button class="btn btn-level" id="level-btn" data-action="cycle-level">СЛОЖНОСТЬ: ОБЫЧНАЯ</button>
+        </div>
+
+        <div class="card game-log">
+          <h3>Ходы <small class="dim" id="move-count">0</small></h3>
+          <ol class="move-list" id="moves"></ol>
+        </div>
+
+        <div class="score-line" id="score">Счёт против Капри: 0 побед · 0 поражений · 0 ничьих</div>
+      </aside>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status-text" class="dim">запуск…</span>
+      <span class="spacer"></span>
+      <span class="dim" id="material">материал: =</span>
+      <span class="dim" id="ply-count">ходов: 0</span>
+    </footer>
+  </div>
+
+  <script src="bridge.js"></script>
+  <script src="chess.js"></script>
+</body>
+</html>

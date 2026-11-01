@@ -6,17 +6,12 @@
 
 #![cfg(windows)]
 
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 
 use parking_lot::Mutex;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject,
-    AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS,
-    HGDIOBJ, HBITMAP,
-};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
@@ -24,24 +19,35 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
     DestroyWindow, DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW,
-    GetSystemMetrics, GetWindowThreadProcessId, LoadIconW, PostMessageW, PostQuitMessage,
+    GetSystemMetrics, GetWindowThreadProcessId, KillTimer, LoadIconW, PostMessageW, PostQuitMessage,
     RegisterClassExW, SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, TrackPopupMenu,
-    TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
+    TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
     IDI_APPLICATION, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SM_CYSCREEN,
     SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, ULW_ALPHA, WM_APP, WM_LBUTTONDOWN,
+    TPM_RIGHTBUTTON, WM_APP, WM_HOTKEY, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MOUSEMOVE, WM_NULL, WM_RBUTTONUP, WM_TIMER, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, SetWindowLongPtrW,
 };
 
 use crate::canvas::{Canvas, Mask};
-use crate::sprite::{Sprites, FIG_HEIGHT, HEIGHT, WIDTH};
+use crate::sprite::{Geometry, Sprites};
 use crate::text;
-use crate::UiRequest;
+use crate::view::ViewSettings;
+use crate::{CharacterSetting, UiRequest};
 
 /// Сообщение «обновить картинку» — шлём сами себе из таймера.
 const WM_CAPRI_TICK: u32 = WM_APP + 1;
 const TIMER_ID: usize = 1;
+/// Таймер второй попытки поставить иконку в трей.
+const TIMER_TRAY: usize = 3;
+/// Сколько раз и с каким шагом пробуем поставить иконку.
+///
+/// `Shell_NotifyIconW(NIM_ADD)` отвечает отказом, если область уведомлений ещё
+/// не готова: Капри стартует вместе с системой, а `explorer.exe` в этот момент
+/// может только подниматься. Одна попытка на старте — это «иконки нет до
+/// перезапуска», поэтому пробуем несколько раз, а не сдаёмся сразу.
+const TRAY_ATTEMPTS: usize = 5;
+const TRAY_RETRY_MS: u32 = 2_000;
 /// Как часто перерисовываем (мс).
 const TICK_MS: u32 = 40;
 /// На сколько пикселей надо сдвинуть мышь, чтобы это считалось
@@ -55,6 +61,14 @@ struct State {
     hwnd: HWND,
     canvas: Canvas,
     sprites: Sprites,
+    /// Размер окна и фигуры (ползунок «Размер» в настройках).
+    geometry: Geometry,
+    /// Живость и выбранный монитор.
+    view: ViewSettings,
+    /// Все мониторы: границы прогулки и выбор экрана.
+    monitors: Vec<capri_core::platform::MonitorInfo>,
+    /// Экран, на котором живём сейчас.
+    area: Area,
     /// Куда двигаться по X (для прогулки).
     vx: i32,
     /// Какая анимация играет и на каком кадре.
@@ -101,6 +115,13 @@ static STATE: Mutex<Option<State>> = Mutex::new(None);
 static QUIT: AtomicBool = AtomicBool::new(false);
 static CLASS_ATOM: AtomicIsize = AtomicIsize::new(0);
 
+/// Сколько попыток поставить иконку в трей уже сделано.
+static TRAY_TRIES: AtomicUsize = AtomicUsize::new(0);
+
+/// Дескриптор модуля: нужен повторной попытке иконки из `wndproc`, а его
+/// вызывают из C, куда ничего не передать.
+static MODULE_HINSTANCE: AtomicIsize = AtomicIsize::new(0);
+
 /// Открыто ли меню прямо сейчас.
 ///
 /// `TrackPopupMenu` не возвращает управление, пока меню не закрыто: он крутит
@@ -139,7 +160,13 @@ fn wide(text: &str) -> Vec<u16> {
 }
 
 /// Запустить окно. Возвращает код выхода. Блокирует поток.
-pub fn run(sprites: Sprites, requests: Sender<UiRequest>) -> i32 {
+pub fn run(
+    sprites: Sprites,
+    requests: Sender<UiRequest>,
+    view: ViewSettings,
+    monitors: Vec<capri_core::platform::MonitorInfo>,
+    hotkey_spec: String,
+) -> i32 {
     unsafe {
         let instance = match GetModuleHandleW(None) {
             Ok(handle) => handle,
@@ -149,7 +176,7 @@ pub fn run(sprites: Sprites, requests: Sender<UiRequest>) -> i32 {
             }
         };
 
-        let class_name = wide("CapriAvatarWindow");
+        let class_name = wide(crate::AVATAR_CLASS);
         let wc = windows::Win32::UI::WindowsAndMessaging::WNDCLASSEXW {
             cbSize: std::mem::size_of::<windows::Win32::UI::WindowsAndMessaging::WNDCLASSEXW>() as u32,
             style: CS_HREDRAW | CS_VREDRAW,
@@ -165,10 +192,12 @@ pub fn run(sprites: Sprites, requests: Sender<UiRequest>) -> i32 {
         }
         CLASS_ATOM.store(atom as isize, Ordering::Relaxed);
 
-        let screen_w = GetSystemMetrics(SM_CXSCREEN);
-        let screen_h = GetSystemMetrics(SM_CYSCREEN);
-        let x = screen_w - WIDTH as i32 - 24;
-        let y = screen_h - HEIGHT as i32 - 48;
+        let geometry = Geometry::for_scale(view.scale);
+        let area = area_of(&monitors, view.monitor);
+        // Как и раньше — не вплотную к краю, а с небольшим отступом.
+        let corner = corner_position("bottom-right", area, geometry);
+        let x = (corner.0 - 24).max(area.x);
+        let y = (corner.1 - 48).max(area.y);
 
         let hwnd = match CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
@@ -177,8 +206,8 @@ pub fn run(sprites: Sprites, requests: Sender<UiRequest>) -> i32 {
             WS_POPUP,
             x,
             y,
-            WIDTH as i32,
-            HEIGHT as i32,
+            geometry.width as i32,
+            geometry.height as i32,
             None,
             None,
             Some(instance.into()),
@@ -191,11 +220,18 @@ pub fn run(sprites: Sprites, requests: Sender<UiRequest>) -> i32 {
             }
         };
 
+        // Клоны для меню и горячей клавиши: остальное уедет в состояние окна.
+        let requests_for_window = requests.clone();
+        let monitors_for_menu = monitors.clone();
         {
             let mut state = State {
                 hwnd,
-                canvas: Canvas::new(WIDTH, HEIGHT),
+                canvas: Canvas::new(geometry.width, geometry.height),
                 sprites,
+                geometry,
+                view,
+                monitors,
+                area,
                 vx: 0,
                 animation: None,
                 opacity: 0.0,
@@ -216,15 +252,28 @@ pub fn run(sprites: Sprites, requests: Sender<UiRequest>) -> i32 {
             *STATE.lock() = Some(state);
         }
 
-        add_tray_icon(hwnd, windows::Win32::Foundation::HINSTANCE(instance.0));
+        add_tray_icon_with_retry(hwnd, windows::Win32::Foundation::HINSTANCE(instance.0));
+
+        // Радиальное меню: своё скрытое окно, которое ждёт горячей клавиши.
+        let menu_ready = crate::radial::init(
+            windows::Win32::Foundation::HINSTANCE(instance.0),
+            requests_for_window.clone(),
+            monitors_for_menu,
+        );
+        if menu_ready {
+            register_hotkey(hwnd, &hotkey_spec, &requests_for_window);
+        } else {
+            log::warn!("Радиальное меню недоступно, горячую клавишу не ставлю");
+        }
+
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = SetWindowPos(
             hwnd,
             None,
             x,
             y,
-            WIDTH as i32,
-            HEIGHT as i32,
+            geometry.width as i32,
+            geometry.height as i32,
             SWP_NOACTIVATE | SWP_NOZORDER,
         );
         SetTimer(Some(hwnd), TIMER_ID, TICK_MS, None);
@@ -283,30 +332,27 @@ pub fn push_event(event: crate::UiEvent) {
             });
         }
         crate::UiEvent::Roam => {
-            // Идём к случайной точке неподалёку.
-            let screen_w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
-            let span = (screen_w - WIDTH as i32).max(1);
-            let target = (state.x + (rand_offset() * 300.0) as i32).clamp(0, span);
+            // Идём к случайной точке неподалёку, не выходя за свой монитор.
+            let span = (state.area.width - state.geometry.width as i32).max(1);
+            let target = (state.x + (rand_offset() * 300.0) as i32)
+                .clamp(state.area.x, state.area.x + span);
+            let speed = state.view.liveliness.walk_speed();
             state.roam_target = Some(target);
-            state.vx = if target > state.x { 6 } else { -6 };
+            state.vx = if target > state.x { speed } else { -speed };
         }
         crate::UiEvent::Hop => {
-            let screen_w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
-            let screen_h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-            let target_x = (state.x + (rand_offset() * 400.0) as i32)
-                .clamp(0, (screen_w - WIDTH as i32).max(1));
-            let target_y = (state.y + (rand_offset() * 200.0) as i32)
-                .clamp(0, (screen_h - HEIGHT as i32).max(1));
-            state.x = target_x;
-            state.y = target_y;
+            let span_x = (state.area.width - state.geometry.width as i32).max(1);
+            let span_y = (state.area.height - state.geometry.height as i32).max(1);
+            state.x = (state.x + (rand_offset() * 400.0) as i32)
+                .clamp(state.area.x, state.area.x + span_x);
+            state.y = (state.y + (rand_offset() * 200.0) as i32)
+                .clamp(state.area.y, state.area.y + span_y);
             state.roam_target = None;
             state.vx = 0;
             apply_position(state);
         }
         crate::UiEvent::MoveTo(where_) => {
-            let screen_w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
-            let screen_h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-            let (x, y) = corner_position(&where_, screen_w, screen_h);
+            let (x, y) = corner_position(&where_, state.area, state.geometry);
             state.x = x;
             state.y = y;
             state.roam_target = None;
@@ -316,8 +362,108 @@ pub fn push_event(event: crate::UiEvent) {
         crate::UiEvent::SetSkin(color) => {
             state.skin = color;
         }
+        crate::UiEvent::Character(setting) => apply_character(state, setting),
+        crate::UiEvent::Hotkey(spec) => register_hotkey(state.hwnd, &spec, &state.requests),
     }
     paint(state);
+}
+
+/// Поставить горячую клавишу на окно. Пустая строка — «клавиша не нужна».
+fn register_hotkey(hwnd: HWND, spec: &str, requests: &Sender<UiRequest>) {
+    crate::hotkey::unregister(hwnd);
+    if spec.trim().is_empty() {
+        log::info!("Горячая клавиша меню выключена");
+        return;
+    }
+    let parsed = match crate::hotkey::parse(spec) {
+        Ok(parsed) => parsed,
+        Err(why) => {
+            let text = format!("Горячая клавиша меню: {why}");
+            log::warn!("{text}");
+            let _ = requests.send(UiRequest::HotkeyError(text));
+            return;
+        }
+    };
+    match crate::hotkey::register(hwnd, parsed) {
+        Ok(()) => log::info!("Горячая клавиша меню: {}", crate::hotkey::describe(parsed)),
+        Err(why) => {
+            log::warn!("{why}");
+            let _ = requests.send(UiRequest::HotkeyError(why));
+        }
+    }
+}
+
+/// Прямоугольник экрана, на котором живёт Капри (физические пиксели).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Area {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+/// Экран для выбранного монитора.
+///
+/// Если такого номера нет (монитор отключили) — берём основной, если и его
+/// нет — весь экран по системным метрикам: без экрана окно жить не может.
+fn area_of(monitors: &[capri_core::platform::MonitorInfo], index: u32) -> Area {
+    let found = monitors
+        .iter()
+        .find(|m| m.index == index)
+        .or_else(|| monitors.iter().find(|m| m.primary))
+        .or_else(|| monitors.first());
+    match found {
+        Some(monitor) if monitor.width > 0 && monitor.height > 0 => Area {
+            x: monitor.x,
+            y: monitor.y,
+            width: monitor.width as i32,
+            height: monitor.height as i32,
+        },
+        _ => Area {
+            x: 0,
+            y: 0,
+            width: unsafe { GetSystemMetrics(SM_CXSCREEN) },
+            height: unsafe { GetSystemMetrics(SM_CYSCREEN) },
+        },
+    }
+}
+
+/// Не дать окну уехать за пределы своего монитора.
+fn clamp_into_area(state: &mut State) {
+    let span_x = (state.area.width - state.geometry.width as i32).max(0);
+    let span_y = (state.area.height - state.geometry.height as i32).max(0);
+    state.x = state.x.clamp(state.area.x, state.area.x + span_x);
+    state.y = state.y.clamp(state.area.y, state.area.y + span_y);
+}
+
+/// Применить новый размер, живость или монитор к живому окну.
+fn apply_character(state: &mut State, setting: CharacterSetting) {
+    match setting {
+        CharacterSetting::Scale(percent) => {
+            let previous = state.geometry;
+            state.view = state.view.with_scale(percent);
+            state.geometry = Geometry::for_scale(state.view.scale);
+            // Растём и сжимаемся от правого нижнего угла: Капри должна
+            // остаться там, где её поставил пользователь.
+            state.x += previous.width as i32 - state.geometry.width as i32;
+            state.y += previous.height as i32 - state.geometry.height as i32;
+            clamp_into_area(state);
+            apply_position(state);
+        }
+        CharacterSetting::Liveliness(value) => {
+            state.view = state.view.with_liveliness(&value);
+        }
+        CharacterSetting::Monitor(index) => {
+            state.view = state.view.with_monitor(index);
+            state.area = area_of(&state.monitors, index);
+            let (x, y) = corner_position("right", state.area, state.geometry);
+            state.x = x;
+            state.y = y;
+            state.roam_target = None;
+            state.vx = 0;
+            apply_position(state);
+        }
+    }
 }
 
 /// Переместить окно на новые координаты.
@@ -335,25 +481,26 @@ fn apply_position(state: &mut State) {
     }
 }
 
-fn corner_position(where_: &str, screen_w: i32, screen_h: i32) -> (i32, i32) {
-    let right = (screen_w - WIDTH as i32).max(0);
-    let bottom = (screen_h - HEIGHT as i32).max(0);
-    let center_x = right / 2;
-    let center_y = bottom / 2;
+fn corner_position(where_: &str, area: Area, geometry: Geometry) -> (i32, i32) {
+    let span_x = (area.width - geometry.width as i32).max(0);
+    let span_y = (area.height - geometry.height as i32).max(0);
+    let right = area.x + span_x;
+    let bottom = area.y + span_y;
+    let center_x = area.x + span_x / 2;
+    let center_y = area.y + span_y / 2;
     match where_ {
-        "left" => (0, bottom),
+        "left" => (area.x, bottom),
         "right" => (right, bottom),
-        "top" => (right, 0),
+        "top" => (right, area.y),
         "bottom" => (right, bottom),
         "center" => (center_x, center_y),
-        "left-top" => (0, 0),
-        "left-bottom" => (0, bottom),
-        "right-top" => (right, 0),
-        "right-bottom" => (right, bottom),
-        "top-left" => (0, 0),
-        "top-right" => (right, 0),
-        "bottom-left" => (0, bottom),
-        "bottom-right" => (right, bottom),
+        "left-top" => (area.x, area.y),
+        "left-bottom" => (area.x, bottom),
+        "right-top" => (right, area.y),
+        "right-bottom" | "bottom-right" => (right, bottom),
+        "top-left" => (area.x, area.y),
+        "top-right" => (right, area.y),
+        "bottom-left" => (area.x, bottom),
         _ => (right, bottom),
     }
 }
@@ -397,9 +544,10 @@ fn frame_choice(state: &State) -> Choice {
 
 /// Собрать кадр и отдать его окну.
 fn paint(state: &mut State) {
-    let width = WIDTH;
-    if state.canvas.width != width || state.canvas.height != HEIGHT {
-        state.canvas = Canvas::new(width, HEIGHT);
+    let geometry = state.geometry;
+    let width = geometry.width;
+    if state.canvas.width != width || state.canvas.height != geometry.height {
+        state.canvas = Canvas::new(width, geometry.height);
     }
 
     let choice = frame_choice(state);
@@ -420,12 +568,15 @@ fn paint(state: &mut State) {
     };
 
     if let Some(image) = frame {
+        // Кадры хранятся в исходном размере: под текущий масштаб подгоняем
+        // только тот, который сейчас показываем.
+        let image = image.fit_height(geometry.fig_height);
         let image = match skin {
             Some(tint) => image.tinted(tint),
-            None => image.clone(),
+            None => image,
         };
         let left = (width as i32 - image.width as i32) / 2;
-        let top = (FIG_HEIGHT as i32 - image.height as i32).max(0) + 4;
+        let top = (geometry.fig_height as i32 - image.height as i32).max(0) + 4;
         canvas.draw_image(&image, left, top, opacity);
     }
 
@@ -438,7 +589,7 @@ fn paint(state: &mut State) {
             let box_w = mask.width as i32 + padding * 2;
             let box_h = mask.height as i32 + padding;
             let box_x = (width as i32 - box_w) / 2;
-            let box_y = FIG_HEIGHT as i32 + 6;
+            let box_y = geometry.fig_height as i32 + 6;
             canvas.round_rect(box_x, box_y, box_w, box_h, 10, [10, 8, 18], 0.82 * opacity);
             canvas.draw_mask(&mask, box_x + padding, box_y + padding / 2, [120, 240, 255], opacity);
         }
@@ -449,60 +600,7 @@ fn paint(state: &mut State) {
 
 /// Отправить пиксели в окно.
 fn blit(state: &mut State) {
-    unsafe {
-        let screen = GetDC(None);
-        let dc = CreateCompatibleDC(Some(screen));
-        let mut info = BITMAPINFO::default();
-        info.bmiHeader = BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: state.canvas.width as i32,
-            biHeight: -(state.canvas.height as i32),
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
-            ..Default::default()
-        };
-        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-        let bitmap: HBITMAP =
-            match CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0) {
-                Ok(bitmap) => bitmap,
-                Err(_) => {
-                    let _ = DeleteDC(dc);
-                    ReleaseDC(None, screen);
-                    return;
-                }
-            };
-        let old = SelectObject(dc, HGDIOBJ(bitmap.0));
-        if !bits.is_null() {
-            std::ptr::copy_nonoverlapping(state.canvas.as_bytes().as_ptr(), bits as *mut u8, state.canvas.as_bytes().len());
-        }
-
-        let blend = BLENDFUNCTION {
-            BlendOp: AC_SRC_OVER as u8,
-            BlendFlags: 0,
-            SourceConstantAlpha: 255,
-            AlphaFormat: AC_SRC_ALPHA as u8,
-        };
-        let size = SIZE { cx: state.canvas.width as i32, cy: state.canvas.height as i32 };
-        let source = POINT { x: 0, y: 0 };
-        let dest = POINT { x: state.x, y: state.y };
-        let _ = UpdateLayeredWindow(
-            state.hwnd,
-            Some(screen),
-            Some(&dest),
-            Some(&size),
-            Some(dc),
-            Some(&source),
-            COLORREF(0),
-            Some(&blend),
-            ULW_ALPHA,
-        );
-
-        SelectObject(dc, old);
-        let _ = DeleteObject(HGDIOBJ(bitmap.0));
-        let _ = DeleteDC(dc);
-        ReleaseDC(None, screen);
-    }
+    crate::layered::blit(state.hwnd, &state.canvas, state.x, state.y);
 }
 
 fn tick() {
@@ -526,10 +624,12 @@ fn tick() {
         }
     }
 
-    // Анимация.
+    // Анимация. «Живость» растягивает кадры: спокойная Капри двигается
+    // медленнее и плавнее, живая — быстрее.
+    let slowdown = state.view.liveliness.frame_slowdown();
     if let Some(anim) = state.animation.as_mut() {
         anim.counter += 1;
-        if anim.counter >= anim.hold {
+        if anim.counter >= (anim.hold * slowdown).max(1) {
             anim.counter = 0;
             anim.index += 1;
             let len = match anim.frames {
@@ -604,6 +704,13 @@ const MENU_INTERRUPT: usize = 1005;
 const MENU_CONFIG: usize = 1006;
 const MENU_RELOAD: usize = 1007;
 const MENU_QUIT: usize = 1008;
+const MENU_PANEL: usize = 1009;
+/// Открыть кольцо меню без клавиатуры — на случай, если горячую клавишу
+/// заняла другая программа.
+const MENU_RING: usize = 1010;
+/// Терминал: панель с потоковым выводом команд. Пункт в трее нужен потому, что
+/// из кольца он живёт в подкольце «Инструменты», а сюда ведёт один клик.
+const MENU_TERMINAL: usize = 1011;
 
 /// Что нужно меню: окно-владелец и канал команд.
 ///
@@ -623,8 +730,11 @@ fn show_menu(hwnd: HWND, requests: &Sender<UiRequest>) {
     };
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
-        let items: [(usize, &str); 8] = [
+        let items: [(usize, &str); 11] = [
             (MENU_CALL, "Позвать Капри"),
+            (MENU_RING, "Кольцо меню (Ctrl+Alt+C)"),
+            (MENU_PANEL, "Настройки…"),
+            (MENU_TERMINAL, "Терминал…"),
             (MENU_INTERRUPT, "Замолчать"),
             (MENU_MIC_NEXT, "Следующий микрофон"),
             (MENU_VOL_UP, "Громче"),
@@ -682,6 +792,15 @@ fn show_menu(hwnd: HWND, requests: &Sender<UiRequest>) {
             MENU_INTERRUPT => {
                 let _ = requests.send(UiRequest::Interrupt);
             }
+            MENU_PANEL => {
+                let _ = requests.send(UiRequest::OpenPanel("settings".into()));
+            }
+            MENU_TERMINAL => {
+                let _ = requests.send(UiRequest::OpenPanel("terminal".into()));
+            }
+            MENU_RING => {
+                crate::radial::toggle();
+            }
             MENU_MIC_NEXT => {
                 let _ = requests.send(UiRequest::MicNext);
             }
@@ -707,7 +826,53 @@ fn show_menu(hwnd: HWND, requests: &Sender<UiRequest>) {
     }
 }
 
-fn add_tray_icon(hwnd: HWND, instance: windows::Win32::Foundation::HINSTANCE) {
+/// Поставить иконку в трей, повторяя попытку, если область уведомлений ещё
+/// не готова.
+///
+/// Отказ `NIM_ADD` на старте — обычное дело, когда система только загрузилась:
+/// `explorer.exe` поднимается позже Капри. Раньше одна неудачная попытка
+/// означала «иконки нет до перезапуска», и в логе оставалось предупреждение.
+/// Теперь первый отказ лишь запускает таймер: до [`TRAY_ATTEMPTS`] попыток с
+/// шагом [`TRAY_RETRY_MS`]. Успех — пишем в лог; исчерпали попытки — честно
+/// предупреждаем один раз, что иконки не будет.
+fn add_tray_icon_with_retry(hwnd: HWND, instance: windows::Win32::Foundation::HINSTANCE) {
+    MODULE_HINSTANCE.store(instance.0 as isize, Ordering::Relaxed);
+    TRAY_TRIES.store(1, Ordering::Relaxed);
+    if add_tray_icon(hwnd, instance) {
+        return;
+    }
+    log::info!(
+        "Иконка в трее: область уведомлений не готова, попробую ещё {} раз(а)",
+        TRAY_ATTEMPTS - 1
+    );
+    unsafe {
+        SetTimer(Some(hwnd), TIMER_TRAY, TRAY_RETRY_MS, None);
+    }
+}
+
+/// Следующая попытка по таймеру. Возвращает `true`, если пора остановиться.
+fn retry_tray_icon(hwnd: HWND, instance: windows::Win32::Foundation::HINSTANCE) -> bool {
+    let tries = TRAY_TRIES.fetch_add(1, Ordering::Relaxed) + 1;
+    if add_tray_icon(hwnd, instance) {
+        unsafe {
+            let _ = KillTimer(Some(hwnd), TIMER_TRAY);
+        }
+        return true;
+    }
+    if tries >= TRAY_ATTEMPTS {
+        log::warn!(
+            "Иконка в трее: Shell_NotifyIconW отказал {tries} раз(а) подряд — иконки не будет. \
+             Меню доступно по Ctrl+Alt+C."
+        );
+        unsafe {
+            let _ = KillTimer(Some(hwnd), TIMER_TRAY);
+        }
+        return true;
+    }
+    false
+}
+
+fn add_tray_icon(hwnd: HWND, instance: windows::Win32::Foundation::HINSTANCE) -> bool {
     unsafe {
         let mut data = NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
@@ -717,7 +882,11 @@ fn add_tray_icon(hwnd: HWND, instance: windows::Win32::Foundation::HINSTANCE) {
             uCallbackMessage: WM_APP + 2,
             ..Default::default()
         };
-        if let Ok(icon) = LoadIconW(Some(instance), PCWSTR(1 as *const u16)) {
+        // Своё лицо лучше стандартной заглушки: в трее Капри должна быть
+        // узнаваемой, а не «какое-то приложение».
+        if let Some(icon) = tray_icon() {
+            data.hIcon = icon;
+        } else if let Ok(icon) = LoadIconW(Some(instance), PCWSTR(1 as *const u16)) {
             data.hIcon = icon;
         } else if let Ok(icon) = LoadIconW(None, IDI_APPLICATION) {
             data.hIcon = icon;
@@ -725,7 +894,117 @@ fn add_tray_icon(hwnd: HWND, instance: windows::Win32::Foundation::HINSTANCE) {
         let tip = wide("Капри");
         let len = tip.len().min(data.szTip.len());
         data.szTip[..len].copy_from_slice(&tip[..len]);
-        let _ = Shell_NotifyIconW(NIM_ADD, &data);
+        // Результат пишем в лог: «иконки нет» надо замечать сразу, а не искать
+        // глазами по трею.
+        if Shell_NotifyIconW(NIM_ADD, &data).as_bool() {
+            log::info!("Иконка в трее: поставлена");
+            true
+        } else {
+            // Без кода ошибки «отказал» ничего не объясняет: причиной может
+            // быть и неготовый explorer, и пустой hIcon, и неверный cbSize.
+            let code = windows::Win32::Foundation::GetLastError().0;
+            log::warn!(
+                "Иконка в трее: Shell_NotifyIconW отказал (код {code}, \
+                 hIcon={:?}, cbSize={})",
+                data.hIcon,
+                data.cbSize
+            );
+            false
+        }
+    }
+}
+
+/// Иконка Капри для трея: 32×32 лицо, нарисованное в памяти.
+///
+/// Ресурсной иконки в exe нет и не будет — фигура собирается кодом. Поэтому
+/// рисуем её теми же двумя цветами, что и аватар: фиолетовый диск и зелёные
+/// глаза в пиксель.
+fn tray_icon() -> Option<windows::Win32::UI::WindowsAndMessaging::HICON> {
+    use windows::Win32::Graphics::Gdi::{CreateBitmap, DeleteObject};
+    use windows::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO};
+
+    const SIZE: usize = 32;
+    // Палитра аватара: фиолетовое тело, зелёная кайма и глаза.
+    const BODY: (u8, u8, u8) = (104, 40, 208);
+    const EDGE: (u8, u8, u8) = (56, 255, 20);
+    const DARK: (u8, u8, u8) = (26, 16, 44);
+
+    let mut pixels = vec![0u8; SIZE * SIZE * 4];
+    let center = (SIZE as f32 - 1.0) / 2.0;
+    let radius = SIZE as f32 / 2.0 - 1.0;
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let dx = x as f32 - center;
+            let dy = y as f32 - center;
+            let distance = (dx * dx + dy * dy).sqrt() / radius;
+            if distance > 1.0 {
+                continue;
+            }
+            let (r, g, b) = if distance > 0.86 {
+                EDGE
+            } else if distance > 0.78 {
+                DARK
+            } else {
+                BODY
+            };
+            let index = (y * SIZE + x) * 4;
+            pixels[index] = b;
+            pixels[index + 1] = g;
+            pixels[index + 2] = r;
+            pixels[index + 3] = 255;
+        }
+    }
+
+    // Глаза и улыбка: два пикселя на глаз — как в спрайте Капри.
+    let mut put = |x: usize, y: usize, color: (u8, u8, u8)| {
+        if x >= SIZE || y >= SIZE {
+            return;
+        }
+        let index = (y * SIZE + x) * 4;
+        pixels[index] = color.2;
+        pixels[index + 1] = color.1;
+        pixels[index + 2] = color.0;
+        pixels[index + 3] = 255;
+    };
+    for (x, y) in [(10, 12), (11, 12), (10, 13), (11, 13)] {
+        put(x, y, EDGE);
+    }
+    for (x, y) in [(20, 12), (21, 12), (20, 13), (21, 13)] {
+        put(x, y, EDGE);
+    }
+    for (x, y) in [(11, 20), (12, 21), (13, 22), (14, 22), (15, 22), (16, 22), (17, 22), (18, 21), (19, 20)] {
+        put(x, y, EDGE);
+    }
+
+    unsafe {
+        let color = CreateBitmap(SIZE as i32, SIZE as i32, 1, 32, Some(pixels.as_ptr().cast()));
+        if color.is_invalid() {
+            log::warn!("Иконка в трее: цветная картинка не создалась");
+            return None;
+        }
+        // Маска из нулей — «показывать всё»: прозрачность задаёт альфа.
+        let zero_mask = vec![0u8; SIZE * SIZE / 8];
+        let mask = CreateBitmap(
+            SIZE as i32,
+            SIZE as i32,
+            1,
+            1,
+            Some(zero_mask.as_ptr().cast()),
+        );
+        let info = ICONINFO {
+            fIcon: true.into(),
+            xHotspot: 0,
+            yHotspot: 0,
+            hbmMask: mask,
+            hbmColor: color,
+        };
+        let icon = CreateIconIndirect(&info).ok();
+        let _ = DeleteObject(color.into());
+        let _ = DeleteObject(mask.into());
+        if icon.is_none() {
+            log::warn!("Иконка в трее: из картинки не собралась");
+        }
+        icon
     }
 }
 
@@ -748,11 +1027,26 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_TIMER => {
             if wparam.0 == TIMER_ID {
                 tick();
+            } else if wparam.0 == TIMER_TRAY {
+                // Иконка в трей: повторная попытка, если область уведомлений
+                // была не готова на старте.
+                let instance = windows::Win32::Foundation::HINSTANCE(
+                    MODULE_HINSTANCE.load(Ordering::Relaxed) as *mut _,
+                );
+                let _ = retry_tray_icon(hwnd, instance);
             }
             LRESULT(0)
         }
         WM_CAPRI_TICK => {
             tick();
+            LRESULT(0)
+        }
+        WM_HOTKEY => {
+            // Горячая клавиша пришла сюда же, где живёт цикл сообщений:
+            // отдельный поток для неё не нужен.
+            if wparam.0 as i32 == crate::hotkey::HOTKEY_ID {
+                crate::radial::toggle();
+            }
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
@@ -793,8 +1087,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 state.dragging = false;
                 state.drag_moved = false;
                 if !moved {
-                    // Клик без движения — позвать Капри.
+                    // Клик без движения — позвать Капри и засчитать поглаживание.
                     let _ = state.requests.send(UiRequest::Call);
+                    let _ = state.requests.send(UiRequest::Petted);
                 }
             }
             LRESULT(0)
@@ -822,6 +1117,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             LRESULT(0)
         }
+        // Второй экземпляр попросил показаться — показываемся и отзываемся.
+        crate::WM_CAPRI_SUMMON => {
+            let guard = STATE.lock();
+            if let Some(state) = guard.as_ref() {
+                let _ = state.requests.send(UiRequest::Call);
+            }
+            LRESULT(0)
+        }
         windows::Win32::UI::WindowsAndMessaging::WM_DESTROY => {
             PostQuitMessage(0);
             LRESULT(0)
@@ -836,10 +1139,55 @@ mod tests {
 
     #[test]
     fn places_window_in_corners() {
-        assert_eq!(corner_position("left", 1000, 800), (0, 300));
-        assert_eq!(corner_position("right", 1000, 800), (660, 300));
-        assert_eq!(corner_position("center", 1000, 800), (330, 150));
-        assert_eq!(corner_position("top-left", 1000, 800), (0, 0));
+        let area = Area { x: 0, y: 0, width: 1000, height: 800 };
+        // Окно во весь рост: 340×500.
+        let full = Geometry::for_scale(100);
+        assert_eq!(corner_position("left", area, full), (0, 300));
+        assert_eq!(corner_position("right", area, full), (660, 300));
+        assert_eq!(corner_position("center", area, full), (330, 150));
+        assert_eq!(corner_position("top-left", area, full), (0, 0));
+    }
+
+    #[test]
+    fn corners_follow_the_chosen_monitor() {
+        // Второй монитор справа: его левый край — за пределами основного.
+        let area = Area { x: 1920, y: -100, width: 1920, height: 1080 };
+        let full = Geometry::for_scale(100);
+        assert_eq!(corner_position("left-top", area, full), (1920, -100));
+        assert_eq!(corner_position("right-bottom", area, full), (3500, 480));
+    }
+
+    #[test]
+    fn window_stays_on_screen_when_scaled() {
+        let area = Area { x: 0, y: 0, width: 800, height: 600 };
+        // Маленькое окно помещается в правый нижний угол …
+        let small = Geometry::for_scale(50);
+        let (x, y) = corner_position("right", area, small);
+        assert_eq!((x, y), (800 - small.width as i32, 600 - small.height as i32));
+        // … и целиком остаётся на экране.
+        assert!(x + small.width as i32 <= area.width);
+        assert!(y + small.height as i32 <= area.height);
+    }
+
+    #[test]
+    fn unknown_monitor_falls_back_to_primary() {
+        let mut primary = capri_core::platform::MonitorInfo::default();
+        primary.index = 0;
+        primary.width = 2560;
+        primary.height = 1440;
+        primary.primary = true;
+        let mut second = capri_core::platform::MonitorInfo::default();
+        second.index = 1;
+        second.x = 2560;
+        second.width = 1920;
+        second.height = 1080;
+
+        let monitors = vec![primary.clone(), second.clone()];
+        assert_eq!(area_of(&monitors, 1).x, 2560);
+        // Монитор отключили, а в настройках остался его номер — берём основной.
+        let fallback = area_of(&monitors, 7);
+        assert_eq!(fallback.width, 2560);
+        assert_eq!(fallback.x, 0);
     }
 
     #[test]
@@ -870,6 +1218,87 @@ mod tests {
         assert!(MenuGuard::try_enter().is_none(), "второе меню открываться не должно");
         drop(first);
         assert!(MenuGuard::try_enter().is_some(), "после закрытия меню снова можно");
+    }
+
+    /// Окно без Windows: для проверки арифметики масштаба и границ хватает.
+    fn test_state(geometry: Geometry, area: Area) -> State {
+        let (requests, _unused) = std::sync::mpsc::channel();
+        State {
+            hwnd: HWND(std::ptr::null_mut()),
+            canvas: Canvas::new(geometry.width, geometry.height),
+            sprites: Sprites { poses: Vec::new(), wave: Vec::new(), eyes: Vec::new(), roam: None },
+            geometry,
+            view: ViewSettings::default(),
+            monitors: Vec::new(),
+            area,
+            vx: 0,
+            animation: None,
+            opacity: 1.0,
+            target_opacity: 1.0,
+            subtitle: String::new(),
+            skin: None,
+            x: 0,
+            y: 0,
+            dragging: false,
+            drag_offset: (0, 0),
+            drag_moved: false,
+            requests,
+            hidden: false,
+            roam_target: None,
+        }
+    }
+
+    #[test]
+    fn shrinking_keeps_the_bottom_right_corner() {
+        let area = Area { x: 0, y: 0, width: 1000, height: 800 };
+        let mut state = test_state(Geometry::for_scale(100), area);
+        // Стоим в правом нижнем углу.
+        state.x = area.width - state.geometry.width as i32;
+        state.y = area.height - state.geometry.height as i32;
+        apply_character(&mut state, CharacterSetting::Scale(50));
+        assert_eq!(state.geometry, Geometry::for_scale(50));
+        // Угол на месте: окно сжалось к нему, а не убежало в центр.
+        assert_eq!(state.x + state.geometry.width as i32, area.width);
+        assert_eq!(state.y + state.geometry.height as i32, area.height);
+    }
+
+    #[test]
+    fn growing_at_the_edge_stays_on_screen() {
+        let area = Area { x: 0, y: 0, width: 800, height: 600 };
+        let mut state = test_state(Geometry::for_scale(50), area);
+        state.x = area.width - state.geometry.width as i32;
+        state.y = area.height - state.geometry.height as i32;
+        apply_character(&mut state, CharacterSetting::Scale(100));
+        assert!(state.x >= 0 && state.y >= 0);
+        assert!(state.x + state.geometry.width as i32 <= area.width);
+        assert!(state.y + state.geometry.height as i32 <= area.height);
+    }
+
+    #[test]
+    fn liveliness_and_monitor_apply_immediately() {
+        let mut primary = capri_core::platform::MonitorInfo::default();
+        primary.width = 1920;
+        primary.height = 1080;
+        primary.primary = true;
+        let mut second = capri_core::platform::MonitorInfo::default();
+        second.index = 1;
+        second.x = 1920;
+        second.width = 2560;
+        second.height = 1440;
+
+        let area = Area { x: 0, y: 0, width: 1920, height: 1080 };
+        let mut state = test_state(Geometry::for_scale(100), area);
+        state.monitors = vec![primary, second];
+
+        apply_character(&mut state, CharacterSetting::Liveliness("calm".into()));
+        assert_eq!(state.view.liveliness, crate::view::Liveliness::Calm);
+
+        apply_character(&mut state, CharacterSetting::Monitor(1));
+        assert_eq!(state.view.monitor, 1);
+        assert_eq!(state.area.x, 1920);
+        assert_eq!(state.area.width, 2560);
+        // Окно переехало на второй монитор.
+        assert!(state.x >= 1920);
     }
 }
 

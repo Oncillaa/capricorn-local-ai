@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>CAPRI // КАПРИ</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="glyph" aria-hidden="true"></div>
+        <div>
+          <div class="brand-title">CAPRI <span class="slash">//</span> КАПРИ</div>
+          <div class="brand-sub">Night-City-API · панель управления</div>
+        </div>
+      </div>
+      <div class="chips">
+        <span class="chip" id="chip-version">v—</span>
+        <span class="chip" id="chip-bridge">мост: подключение…</span>
+      </div>
+    </header>
+
+    <nav class="nav">
+      <button class="nav-item is-active" data-section="settings"><span class="nav-ico">⚙</span>КАПРИ</button>
+      <button class="nav-item" data-section="behavior"><span class="nav-ico">✳</span>ПОВЕДЕНИЕ</button>
+      <button class="nav-item" data-section="shop"><span class="nav-ico">▤</span>МАГАЗИН</button>
+      <button class="nav-item" data-section="agents"><span class="nav-ico">▣</span>АГЕНТЫ</button>
+      <button class="nav-item" data-section="sound"><span class="nav-ico">◉</span>ЗВУК</button>
+      <button class="nav-item" data-section="voice"><span class="nav-ico">🎙</span>ГОЛОС</button>
+      <button class="nav-item" data-section="translate"><span class="nav-ico">⌨</span>ПЕРЕВОД</button>
+      <button class="nav-item" data-section="discord"><span class="nav-ico">◈</span>DISCORD</button>
+      <button class="nav-item" data-section="system"><span class="nav-ico">⏻</span>СИСТЕМА</button>
+      <button class="nav-item" data-section="authors"><span class="nav-ico">&lt;/&gt;</span>АВТОРЫ</button>
+    </nav>
+
+    <main class="content">
+      <section class="pane is-active" data-pane="settings">
+        <h2 class="pane-title">Настройки</h2>
+
+        <div class="cards">
+          <div class="card">
+            <h3>Персонаж <span class="phase">Фаза 1</span></h3>
+
+            <div class="row">
+              <div class="row-label">Размер<small>масштаб фигуры на рабочем столе</small></div>
+              <span class="row-value" id="size-value">100 %</span>
+            </div>
+            <div class="row">
+              <input type="range" id="size-range" min="1" max="100" value="100">
+            </div>
+
+            <div class="row">
+              <div class="row-label">Быстрый размер</div>
+              <div class="btn-group" id="size-presets">
+                <button class="btn" data-scale="35">S</button>
+                <button class="btn" data-scale="55">M</button>
+                <button class="btn" data-scale="80">L</button>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-label">Живость<small>как часто Капри шевелится и гуляет</small></div>
+              <div class="segmented" id="liveliness">
+                <button class="btn" data-liveliness="calm">Спокойная</button>
+                <button class="btn" data-liveliness="normal">Обычная</button>
+                <button class="btn is-on" data-liveliness="lively">Живая</button>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-label">Экран<small>на каком мониторе жить</small></div>
+              <select class="select" id="monitor"></select>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Подключение</h3>
+            <dl class="facts" id="facts">
+              <dt>Состояние</dt><dd>ожидаю ядро…</dd>
+            </dl>
+            <div class="row" style="margin-top: 16px;">
+              <button class="btn btn-accent" data-action="open-config">Открыть config.json</button>
+              <button class="btn" data-action="reload-config">Перечитать</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Что дальше</h3>
+            <div class="stub">
+              Размер, живость и выбор монитора уже работают: меняются на лету и
+              сохраняются в <b>config.json</b>.
+              <br><br>
+              Уже готово: радиальное меню по <b>Ctrl+Alt+C</b>, магазин скинов,
+              экран уровней, медиа-виджет с эквалайзером и Discord Rich Presence
+              (включается в <b>config.json</b>).
+              <br><br>
+              В работе: шахматы с комментариями ИИ, перевод с экрана и
+              терминал-виджет.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="pane" data-pane="behavior">
+        <h2 class="pane-title">Поведение <span class="phase">Фаза 1</span></h2>
+
+        <div class="cards">
+          <div class="card">
+            <h3>Болталка <small class="dim">сама заговаривает, когда скучно</small></h3>
+
+            <div class="row">
+              <div class="row-label">Заговаривать<small>без вопроса с твоей стороны</small></div>
+              <div class="segmented" id="chatter">
+                <button class="btn" data-on="1">Включена</button>
+                <button class="btn" data-on="0">Выключена</button>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-label">Не чаще, чем раз в<small>минуты между появлениями</small></div>
+              <span class="row-value" id="chatter-min-value">15 мин</span>
+            </div>
+            <div class="row">
+              <input type="range" id="chatter-min" min="1" max="120" value="15">
+            </div>
+
+            <div class="row">
+              <div class="row-label">Не реже, чем раз в<small>и это тоже минуты</small></div>
+              <span class="row-value" id="chatter-max-value">40 мин</span>
+            </div>
+            <div class="row">
+              <input type="range" id="chatter-max" min="1" max="120" value="40">
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Характер</h3>
+
+            <div class="row">
+              <div class="row-label">Перебивать<small>можно ли тебе перебить меня на полуслове</small></div>
+              <div class="segmented" id="barge-in">
+                <button class="btn" data-on="1">Можно</button>
+                <button class="btn" data-on="0">Нельзя</button>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-label">Здороваться при запуске<small>первая фраза — за мной</small></div>
+              <div class="segmented" id="greet-on-start">
+                <button class="btn" data-on="1">Да</button>
+                <button class="btn" data-on="0">Нет</button>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-label">Искать в сети<small>когда не уверена в ответе</small></div>
+              <div class="segmented" id="search-when-unsure">
+                <button class="btn" data-on="1">Да</button>
+                <button class="btn" data-on="0">Нет</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Прогулки</h3>
+
+            <div class="row">
+              <div class="row-label">Шанс отойти<small>как часто я гуляю по экрану между делами</small></div>
+              <span class="row-value" id="roam-value">50 %</span>
+            </div>
+            <div class="row">
+              <input type="range" id="roam" min="0" max="100" value="50">
+            </div>
+
+            <div class="stub">
+              Всё в этом разделе меняется на лету и сразу пишется в
+              <b>config.json</b> — перезапуск не нужен.
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="pane" data-pane="shop" data-stub></section>
+      <section class="pane" data-pane="agents" data-stub></section>
+      <section class="pane" data-pane="sound" data-stub></section>
+      <section class="pane" data-pane="voice" data-stub></section>
+      <section class="pane" data-pane="translate">
+        <h2 class="pane-title">Перевод <span class="phase">Экран 11</span></h2>
+
+        <div class="cards">
+          <div class="card card-wide">
+            <h3>Язык <small class="dim">на какой переводить распознанный текст</small></h3>
+
+            <div class="row row-stack">
+              <div class="row-label">Переводить на<small>этот же язык подставляется по умолчанию</small></div>
+              <div class="segmented" id="translate-to"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Провайдер <small class="dim">чем переводить</small></h3>
+
+            <div class="row">
+              <div class="row-label">LibreTranslate<small>адрес своего сервера, например http://127.0.0.1:5000. Пусто — не использовать</small></div>
+            </div>
+            <div class="row">
+              <input type="text" id="translate-url" class="field" placeholder="http://127.0.0.1:5000" spellcheck="false">
+            </div>
+
+            <div class="hint">
+              Порядок выбора: LibreTranslate → локальная модель (Ollama) → облако.
+              Свой сервер переводит быстрее всего и не требует ни ключа, ни сети.
+              Кто переводит сейчас, видно в шапке самой панели «Перевод».
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Как это работает</h3>
+            <div class="stub">
+              Открой панель «Перевод», нажми <b>Выделить область на экране</b> и обведи
+              текст мышью. Распознавание идёт встроенным движком Windows — офлайн,
+              без моделей рядом с программой. Язык распознавания подбирается сам:
+              английский движок читает латиницу, русский — кириллицу, смешанный
+              текст собирается из обоих.
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="pane" data-pane="discord" data-stub></section>
+      <section class="pane" data-pane="system" data-stub></section>
+      <section class="pane" data-pane="authors" data-stub></section>
+
+      <!-- Нижняя панель действий: на макете «Сохранить» и «Выйти» стоят
+           отдельно от карточек, по правому краю. -->
+      <div class="pane-actions">
+        <button class="btn btn-save" data-action="save">Сохранить</button>
+        <button class="btn btn-quit" data-action="quit">Выйти</button>
+      </div>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status-text" class="dim">запуск…</span>
+      <span class="spacer"></span>
+      <span class="dim" id="config-path">config.json</span>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -45,6 +45,19 @@ pub const SPEECH_RULES: &str = "Твои ответы озвучиваются �
 /// Все реплики: ключ → варианты. Полный список переносится из `persona.py`.
 static LINES: Lazy<Vec<(&'static str, &'static [&'static str])>> = Lazy::new(|| {
     vec![
+        // Сильно устала (растёт по минутам без внимания).
+        ("tired", &[
+            "Я начинаю сбоить от усталости. Дай мне минутку… или погладь.",
+            "Усталость почти сто процентов, {name}. Погладь меня — и я снова бодрая.",
+            "Мои процессы греются. Немного внимания — и порядок.",
+        ]),
+        // Витрина магазина: фраза сверху, как на скриншоте «Магазин».
+        ("shop", &[
+            "Хрусть. Дискета. Одаскульно.",
+            "Есть ECS — есть стиль. Нет ECS — есть работа.",
+            "Покупай, пока я не передумала.",
+            "Скины не для красоты. Ладно, и для красоты тоже.",
+        ]),
         ("greet", &[
             "Я снова в сети. [Скучал|Скучала]?",
             "Капри онлайн. Зови по имени, я вся внимание.",
@@ -376,15 +389,79 @@ pub fn user_context() -> String {
 
 /// Полный системный промпт.
 pub fn system_prompt() -> String {
-    format!("{CHARACTER}\n\n{SPEECH_RULES}\n\n{}", user_context())
+    format!("{}\n\n{}\n\n{}", character(), speech_rules(), user_context())
+}
+
+// ---------------------------------------------------------- личность из файла
+
+/// Переопределения личности из `persona.json`.
+///
+/// Пустая строка в поле означает «взять встроенный текст»: так файл может
+/// содержать только то, что человек действительно хочет изменить.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct PersonaFile {
+    /// Основной характер: как говорить, чего не делать.
+    pub character: String,
+    /// Правила для озвучки (длина ответа, без markdown).
+    pub speech_rules: String,
+}
+
+static OVERRIDE: Lazy<RwLock<PersonaFile>> = Lazy::new(|| RwLock::new(PersonaFile::default()));
+
+/// Подхватить `persona.json` из каталога программы.
+///
+/// Файла нет — молча остаёмся со встроенной личностью. Файл битый — тоже:
+/// характер Капри не должен пропадать из-за забытой кавычки.
+pub fn load_persona(base_dir: &std::path::Path) {
+    let path = base_dir.join("persona.json");
+    // Файла нет — возвращаемся к встроенной личности. Это важно и в жизни:
+    // человек удалил persona.json, значит хочет штатный характер, а не тот,
+    // что случайно остался в памяти.
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        *OVERRIDE.write() = PersonaFile::default();
+        return;
+    };
+    let text = text.strip_prefix('\u{FEFF}').unwrap_or(&text);
+    match serde_json::from_str::<PersonaFile>(text) {
+        Ok(file) => {
+            *OVERRIDE.write() = file;
+        }
+        Err(why) => {
+            log::warn!("persona.json не разобрался ({why}) — остаюсь со встроенной личностью");
+            *OVERRIDE.write() = PersonaFile::default();
+        }
+    }
+}
+
+/// Характер: из файла, если он там есть, иначе встроенный.
+pub fn character() -> String {
+    let custom = OVERRIDE.read().character.trim().to_string();
+    if custom.is_empty() { CHARACTER.to_string() } else { custom }
+}
+
+/// Правила озвучки: из файла, если он там есть, иначе встроенные.
+pub fn speech_rules() -> String {
+    let custom = OVERRIDE.read().speech_rules.trim().to_string();
+    if custom.is_empty() { SPEECH_RULES.to_string() } else { custom }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // Личность и обращение живут в общих `USER`/`OVERRIDE`, а тесты идут
+    // параллельно в одном процессе. Любой тест, который их меняет, обязан
+    // держать этот замок — иначе один видит данные другого.
+    static PERSONA_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        PERSONA_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn gender_and_name_substitution() {
+        let _guard = lock();
         set_user("Аня", "female");
         assert_eq!(gendered("[Скучал|Скучала]?"), "Скучала?");
         set_user("", "male");
@@ -420,6 +497,7 @@ mod tests {
 
     #[test]
     fn named_variants_skipped_without_name() {
+        let _guard = lock();
         set_user("", "male");
         for v in variants("hide") {
             if !v.contains("{name}") {
@@ -429,5 +507,77 @@ mod tests {
         set_user("Вася", "male");
         assert!(line_first("hide", &[]).len() > 0);
         set_user("", "male");
+    }
+
+    // --- личность из файла ---
+    //
+    // Переопределение живёт в общем `OVERRIDE`, поэтому тесты, которые его
+    // трогают, держат общий замок (см. `lock` выше).
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("target")
+            .join("test-tmp")
+            .join(format!("persona-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)
+            .unwrap_or_else(|e| panic!("каталог {} не создался: {e}", dir.display()));
+        dir
+    }
+
+    #[test]
+    fn a_custom_character_replaces_the_builtin_one() {
+        let _guard = lock();
+        let dir = scratch("custom");
+        std::fs::write(
+            dir.join("persona.json"),
+            r#"{"character": "Говори коротко и по делу.", "speech_rules": ""}"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        load_persona(&dir);
+        assert_eq!(character(), "Говори коротко и по делу.");
+        // Пустое поле — значит «встроенное», а не «никаких правил».
+        assert_eq!(speech_rules(), SPEECH_RULES);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        load_persona(&dir); // сбрасываем переопределение для соседних тестов
+    }
+
+    #[test]
+    fn no_file_keeps_the_builtin_persona() {
+        let _guard = lock();
+        let dir = scratch("absent");
+        load_persona(&dir);
+        assert_eq!(character(), CHARACTER);
+        assert_eq!(speech_rules(), SPEECH_RULES);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_broken_file_keeps_the_builtin_persona() {
+        let _guard = lock();
+        let dir = scratch("broken");
+        std::fs::write(dir.join("persona.json"), "{ это не json")
+            .unwrap_or_else(|e| panic!("{e}"));
+        load_persona(&dir);
+        // Характер не должен пропасть из-за забытой кавычки.
+        assert_eq!(character(), CHARACTER);
+        let _ = std::fs::remove_dir_all(&dir);
+        load_persona(&dir);
+    }
+
+    #[test]
+    fn the_prompt_uses_the_loaded_character() {
+        let _guard = lock();
+        let dir = scratch("prompt");
+        std::fs::write(dir.join("persona.json"), r#"{"character": "Я тестовый характер."}"#)
+            .unwrap_or_else(|e| panic!("{e}"));
+        load_persona(&dir);
+        let prompt = system_prompt();
+        assert!(prompt.contains("Я тестовый характер."), "промпт: {prompt}");
+        let _ = std::fs::remove_dir_all(&dir);
+        load_persona(&dir);
     }
 }

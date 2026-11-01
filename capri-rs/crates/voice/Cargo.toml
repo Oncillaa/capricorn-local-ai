@@ -21,5 +21,20 @@ sha2 = { workspace = true }
 base64 = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_Media_Speech", "Win32_System_Com"] }
+windows = { workspace = true, features = [
+    "Win32_Media_Speech",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    # Насос сообщений: движку SAPI нужен цикл сообщений на потоке речи.
+    "Win32_UI_WindowsAndMessaging",
+    # Голос Windows 10/11: Media.SpeechSynthesis — современнее SAPI и умеет
+    # отдавать готовый звук потоком, который мы играем сами.
+    "Media_SpeechSynthesis",
+    # Без Media_Core windows-крейт не генерирует SynthesizeTextToStreamAsync.
+    "Media_Core",
+    "Storage_Streams",
+    "Foundation",
+    "Foundation_Collections",
+    "Globalization",
+] }
 
