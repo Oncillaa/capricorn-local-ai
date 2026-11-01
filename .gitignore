@@ -33,5 +33,11 @@ chat_history.json
 *.mp3
 py-tts-*
 
+# скрипт и текст для голоса Windows: программа пишет их сама рядом с собой
+capri-tts.ps1
+capri-tts-text.txt
+capri-tts-out.wav
+capri-tts-err.txt
+
 # служебное
 *.tmp
