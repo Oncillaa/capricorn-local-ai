@@ -1113,6 +1113,28 @@ fn chat_action(
                 return;
             }
 
+            // Заметка — по той же причине: текст хранится в нашем файле, и
+            // пересказ модели здесь только помешал бы.
+            if capri_core::notes::requested(&text).is_some()
+                || capri_core::notes::asks_about_notes(&text.to_lowercase())
+            {
+                let mut history = store.load();
+                history.push(Message::user(&text, chat::now_hhmm()));
+                history.push(Message::capri(
+                    "Это мои заметки: ответ скажу голосом, а список — в разделе «Заметки».",
+                    chat::now_hhmm(),
+                ));
+                if let Err(why) = store.save(&history) {
+                    log::write_line("WARN", &format!("Чат: {why}"));
+                }
+                let snapshot = cfg.read().clone();
+                let (model, provider) = chat_model_label(&snapshot);
+                push(false, &history, &model, &provider);
+                // Ядро само поймёт, запись это или вопрос про заметки.
+                let _ = requests.send(UiRequest::ChatCommand(text));
+                return;
+            }
+
             let mut history = store.load();
             history.push(Message::user(&text, chat::now_hhmm()));
             // Свою реплику показываем сразу, не ожидая ответа.
@@ -1835,6 +1857,27 @@ fn panel_dispatch(
             "reminder-clear" => {
                 let _ = requests.send(UiRequest::ReminderClear);
             }
+            // Заметки — та же схема, что у напоминаний: книга в ядре.
+            "note-add" => {
+                let text = event
+                    .data
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if !text.is_empty() {
+                    let _ = requests.send(UiRequest::NoteAdd(text));
+                }
+            }
+            "note-remove" => {
+                if let Some(id) = event.data.get("id").and_then(|v| v.as_u64()) {
+                    let _ = requests.send(UiRequest::NoteRemove(id));
+                }
+            }
+            "note-clear" => {
+                let _ = requests.send(UiRequest::NoteClear);
+            }
             // Терминал: вывод идёт построчно, поэтому тоже мимо общего снимка.
             "terminal-run" | "terminal-cancel" => {
                 terminal_action(&event.action, &event.data, panels);
@@ -2089,6 +2132,7 @@ fn panel_state(cfg: &Arc<RwLock<Config>>, base_dir: &PathBuf, monitors: &[Monito
         "monitors": monitor_list,
         "save": save_snapshot(base_dir),
         "reminders": reminders_snapshot(base_dir),
+        "notes": notes_snapshot(base_dir),
         "config": {
             "enable_ai": config.enable_ai,
             "local_ai": config.local_ai,
@@ -2162,6 +2206,18 @@ fn reminders_snapshot(base_dir: &PathBuf) -> serde_json::Value {
     serde_json::json!({
         "items": book.to_json(now),
         "count": book.pending().len(),
+    })
+}
+
+/// Заметки для панели настроек.
+///
+/// Как и напоминания: читаем файл, а не книгу ядра. Пишет файл только ядро,
+/// поэтому он всегда честный, а панели не нужно ждать ядро.
+fn notes_snapshot(base_dir: &PathBuf) -> serde_json::Value {
+    let book = capri_core::notes::NoteStore::new(base_dir).load();
+    serde_json::json!({
+        "items": book.to_json(),
+        "count": book.len(),
     })
 }
 

@@ -152,6 +152,36 @@ mod tests {
 
 
     #[test]
+    fn notes_pane_is_real() {
+        // Раздел заметок обязан быть настоящим: поле, список и кнопки.
+        // Иначе человек записывает мысль только голосом, а посмотреть и
+        // убрать записанное ему негде.
+        let page = get("settings.html").expect("страница настроек должна быть");
+        let html = std::str::from_utf8(page.bytes).unwrap_or_default();
+        assert!(
+            !html.contains(r#"data-pane="notes" data-stub"#),
+            "раздел заметок снова стал заглушкой"
+        );
+        for id in ["note-text", "note-add", "note-list", "note-clear"] {
+            assert!(
+                html.contains(&format!(r#"id="{id}""#)),
+                "в разделе заметок нет элемента «{id}»"
+            );
+        }
+        assert!(
+            html.contains(r#"data-section="notes""#),
+            "нет кнопки меню для заметок"
+        );
+
+        // Страница уходит теми же действиями, что разбирает main.rs.
+        let script = get("app.js").expect("общий скрипт должен быть");
+        let js = std::str::from_utf8(script.bytes).unwrap_or_default();
+        for action in ["note-add", "note-remove", "note-clear", "showNotes"] {
+            assert!(js.contains(action), "скрипт не знает про «{action}»");
+        }
+    }
+
+    #[test]
     fn reminders_pane_is_real() {
         // Раздел напоминаний обязан быть настоящим: поле, список и кнопки.
         // Иначе человек ставит напоминание только голосом — а проверить,

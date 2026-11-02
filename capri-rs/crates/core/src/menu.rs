@@ -49,7 +49,7 @@ pub const SECTORS: [Sector; 8] = [
     // «Инструменты» — не панель, а второе кольцо: терминал, медиа, перевод и
     // остальное не помещаются в восемь секторов основного.
     Sector { id: "tools", label: "Инструменты", target: Target::Submenu, phase: 4 },
-    Sector { id: "notes", label: "Заметки", target: Target::Soon, phase: 8 },
+    Sector { id: "notes", label: "Заметки", target: Target::PanelSection("settings", "notes"), phase: 8 },
     Sector { id: "levels", label: "Уровни", target: Target::Panel("levels"), phase: 3 },
     Sector { id: "devs", label: "Разработчики", target: Target::Soon, phase: 8 },
 ];
@@ -207,6 +207,14 @@ mod tests {
             );
             assert_eq!(panel_of(sector), Some("settings"));
         }
+    }
+
+    #[test]
+    fn notes_sector_opens_the_notes_section() {
+        // Заметки перестали быть «фазой 8»: сектор обязан вести в их раздел.
+        let notes = find("notes").expect("нет сектора «Заметки»");
+        assert_eq!(notes.target, Target::PanelSection("settings", "notes"));
+        assert_eq!(panel_of(notes), Some("settings"));
     }
 
     #[test]

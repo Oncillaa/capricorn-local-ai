@@ -25,6 +25,7 @@
       <button class="nav-item is-active" data-section="settings"><span class="nav-ico">⚙</span>КАПРИ</button>
       <button class="nav-item" data-section="behavior"><span class="nav-ico">✳</span>ПОВЕДЕНИЕ</button>
       <button class="nav-item" data-section="reminders"><span class="nav-ico">⏰</span>НАПОМИНАНИЯ</button>
+      <button class="nav-item" data-section="notes"><span class="nav-ico">📝</span>ЗАМЕТКИ</button>
       <button class="nav-item" data-section="shop"><span class="nav-ico">▤</span>МАГАЗИН</button>
       <button class="nav-item" data-section="agents"><span class="nav-ico">▣</span>АГЕНТЫ</button>
       <button class="nav-item" data-section="sound"><span class="nav-ico">◉</span>ЗВУК</button>
@@ -202,6 +203,31 @@
             <div id="reminder-list" class="reminder-list"></div>
             <div class="row">
               <button class="btn" id="reminder-clear">Убрать все</button>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="pane" data-pane="notes">
+        <h2 class="pane-title">Заметки <span class="phase">новое</span></h2>
+
+        <div class="cards">
+          <div class="card card-wide">
+            <h3>Записать мысль <small class="dim">голосом или отсюда</small></h3>
+            <p class="hint">
+              Одной строкой, без времени: «купить хлеб», «позвонить Маше до пятницы».
+              Голосом так же: «Капри, запиши купить хлеб» или «Капри, запомни, что я люблю кофе».
+            </p>
+            <div class="row row-stack">
+              <input id="note-text" type="text" placeholder="купить хлеб" />
+              <button class="btn btn-accent" id="note-add">Записать</button>
+            </div>
+          </div>
+
+          <div class="card card-wide">
+            <h3>Что записано <small class="dim" id="note-count">—</small></h3>
+            <div id="note-list" class="reminder-list"></div>
+            <div class="row">
+              <button class="btn" id="note-clear">Убрать все</button>
             </div>
           </div>
         </div>

@@ -353,6 +353,40 @@ function showReminders(state) {
     .join('');
 }
 
+/**
+ * Список заметок: что записано и когда.
+ *
+ * Заметки, в отличие от напоминаний, не «ждут» и не срабатывают — они просто
+ * лежат, поэтому и порядок в списке обратный: свежая мысль сверху.
+ */
+function showNotes(state) {
+  const box = document.getElementById('note-list');
+  if (!box) return;
+  const all = ((state && state.notes && state.notes.items) || []).slice().reverse();
+
+  const count = document.getElementById('note-count');
+  if (count) {
+    count.textContent = all.length
+      ? `${all.length} ${plural(all.length, 'запись', 'записи', 'записей')}`
+      : 'пусто';
+  }
+
+  if (!all.length) {
+    box.innerHTML = '<p class="hint">Пока пусто. Напиши выше — или скажи «Капри, запиши …».</p>';
+    return;
+  }
+
+  box.innerHTML = all
+    .map(
+      (item) => `<div class="reminder-row">
+        <span class="reminder-when">${escapeHtml(item.when || '')}</span>
+        <span class="reminder-what">${escapeHtml(item.text || '')}</span>
+        <button class="btn" data-note="${item.id}">Убрать</button>
+      </div>`,
+    )
+    .join('');
+}
+
 /** Форма слова по числу — чтобы «1 штука», «2 штуки», «5 штук». */
 function plural(count, one, few, many) {
   const tail = count % 100;
@@ -416,6 +450,7 @@ function paint() {
   showSound(config);
   showShop(state);
   showReminders(state);
+  showNotes(state);
 
   const facts = document.getElementById('facts');
   if (facts) {
@@ -514,6 +549,7 @@ function wire() {
   wireSound();
   wireShop();
   wireReminders();
+  wireNotes();
 
   // Esc закрывает панель — как у любого нормального окна настроек.
   window.addEventListener('keydown', (event) => {
@@ -771,6 +807,54 @@ function wireReminders() {
     clear.addEventListener('click', () => {
       capri.post('reminder-clear');
       capri.status('убираю все напоминания');
+      setTimeout(() => capri.post('ready'), 500);
+    });
+  }
+}
+
+/** Заметки: записать строку, убрать одну, убрать все. */
+function wireNotes() {
+  const add = document.getElementById('note-add');
+  const input = document.getElementById('note-text');
+  if (add && input) {
+    const send = () => {
+      const text = input.value.trim();
+      if (!text) {
+        capri.status('напиши, что записать');
+        input.focus();
+        return;
+      }
+      capri.post('note-add', { text });
+      capri.status('записала');
+      input.value = '';
+      setTimeout(() => capri.post('ready'), 500);
+    };
+    add.addEventListener('click', send);
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        send();
+      }
+    });
+  }
+
+  const list = document.getElementById('note-list');
+  if (list) {
+    list.addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-note]');
+      if (!btn) return;
+      capri.post('note-remove', { id: Number(btn.dataset.note) });
+      btn.disabled = true;
+      btn.textContent = 'Убираю…';
+      setTimeout(() => capri.post('ready'), 500);
+    });
+  }
+
+  const clear = document.getElementById('note-clear');
+  if (clear) {
+    clear.addEventListener('click', () => {
+      capri.post('note-clear');
+      capri.status('убираю все заметки');
       setTimeout(() => capri.post('ready'), 500);
     });
   }

@@ -129,6 +129,14 @@ pub enum Job {
     ReminderCancel(u64),
     /// Убрать все напоминания.
     ReminderClear,
+    /// Записать заметку из панели (готовый текст).
+    NoteAdd(String),
+    /// Убрать одну заметку по номеру.
+    NoteRemove(u64),
+    /// Убрать все заметки.
+    NoteClear,
+    /// Текст из окна чата: разбирается сразу, без окна пробуждения.
+    ChatCommand(String),
     /// Закрыть Капри совсем (меню в трее, кнопка в панели, выход из окна).
     Quit,
     /// Озвучка закончилась (приходит из потока речи).
@@ -231,6 +239,10 @@ impl Bridge {
             UiRequest::ReminderAdd(body) => Job::ReminderAdd(body),
             UiRequest::ReminderCancel(id) => Job::ReminderCancel(id),
             UiRequest::ReminderClear => Job::ReminderClear,
+            UiRequest::NoteAdd(text) => Job::NoteAdd(text),
+            UiRequest::NoteRemove(id) => Job::NoteRemove(id),
+            UiRequest::NoteClear => Job::NoteClear,
+            UiRequest::ChatCommand(text) => Job::ChatCommand(text),
         };
         let _ = self.jobs.send(job);
     }
@@ -568,6 +580,51 @@ impl Capri {
                 log::info!("Все напоминания убраны из панели: {count}");
                 self.summon();
                 self.say(&reminders::cancelled_all(count));
+                false
+            }
+            Job::NoteAdd(text) => {
+                let id = self.notes.add(text.clone(), notes::now_secs());
+                let _ = self.note_store.save(&self.notes);
+                log::info!("Заметка #{id} из панели: {text}");
+                self.summon();
+                self.say(&notes::saved(&text));
+                false
+            }
+            Job::NoteRemove(id) => {
+                let text = self
+                    .notes
+                    .notes
+                    .iter()
+                    .find(|n| n.id == id)
+                    .map(|n| n.text.clone());
+                match text {
+                    Some(text) => {
+                        self.notes.remove(id);
+                        let _ = self.note_store.save(&self.notes);
+                        log::info!("Заметка убрана из панели: {text}");
+                        self.summon();
+                        self.say(&notes::removed(Some(&text)));
+                    }
+                    None => log::info!("Заметка #{id} уже убрана"),
+                }
+                false
+            }
+            Job::NoteClear => {
+                let count = self.notes.clear();
+                let _ = self.note_store.save(&self.notes);
+                log::info!("Все заметки убраны из панели: {count}");
+                self.summon();
+                self.say(&notes::removed_all(count));
+                false
+            }
+            // Набранное в окне чата разбирается без окна пробуждения: имени
+            // можно не повторять — человек и так обращается к Капри.
+            Job::ChatCommand(text) => {
+                let text = text.trim().to_string();
+                if !text.is_empty() {
+                    self.awake_until = Instant::now() + self.listen_window();
+                    self.process_command(&text);
+                }
                 false
             }
             Job::Quit => {
