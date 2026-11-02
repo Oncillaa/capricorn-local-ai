@@ -1048,6 +1048,7 @@ fn chat_action(
     cfg: &Arc<RwLock<Config>>,
     base_dir: &PathBuf,
     panels: &Sender<capri_panels::Command>,
+    requests: &Sender<UiRequest>,
 ) {
     use capri_core::chat::{self, Message, Store};
 
@@ -1088,6 +1089,27 @@ fn chat_action(
         "chat-send" => {
             let text = data.get("text").and_then(|v| v.as_str()).unwrap_or_default().trim().to_string();
             if text.is_empty() {
+                return;
+            }
+
+            // Просьбу про напоминание разбирает ядро, а не модель: время и
+            // дело — это наши часы и файл, выдумывать их нейросети нельзя.
+            // В окне чата человек пишет «напомни мне…» так же, как говорит.
+            if let Some(body) = capri_core::reminders::requested(&text) {
+                let mut history = store.load();
+                history.push(Message::user(&text, chat::now_hhmm()));
+                history.push(Message::capri(
+                    "Напоминание приняла — смотри раздел «Напоминания» в настройках.",
+                    chat::now_hhmm(),
+                ));
+                if let Err(why) = store.save(&history) {
+                    log::write_line("WARN", &format!("Чат: {why}"));
+                }
+                let snapshot = cfg.read().clone();
+                let (model, provider) = chat_model_label(&snapshot);
+                push(false, &history, &model, &provider);
+                // Дальше — тот же разбор времени, что у голоса и у панели.
+                let _ = requests.send(UiRequest::ReminderAdd(body));
                 return;
             }
 
@@ -1599,7 +1621,7 @@ fn panel_dispatch(
                 }
                 // Чату — своя история, а не общий снимок настроек.
                 if event.panel == capri_panels::PanelId::Chat {
-                    chat_action("chat-ready", &serde_json::Value::Null, cfg, base_dir, panels);
+                    chat_action("chat-ready", &serde_json::Value::Null, cfg, base_dir, panels, requests);
                     continue;
                 }
                 // Отладка перевода: `CAPRI_TRANSLATE_RECT=...` заодно просит
@@ -1788,7 +1810,7 @@ fn panel_dispatch(
             }
             // Чат: своя история и свой ответ — общего снимка ему мало.
             "chat-send" | "chat-ready" | "chat-clear" => {
-                chat_action(&event.action, &event.data, cfg, base_dir, panels);
+                chat_action(&event.action, &event.data, cfg, base_dir, panels, requests);
             }
             // Напоминания: книга живёт в ядре, поэтому панель просит ядро,
             // а снимок для показа читается из файла. Страница после нажатия
