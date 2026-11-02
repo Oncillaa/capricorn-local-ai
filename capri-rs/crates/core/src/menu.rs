@@ -14,6 +14,10 @@
 pub enum Target {
     /// Открыть панель интерфейса с таким именем.
     Panel(&'static str),
+    /// Открыть панель и сразу перейти в её раздел (`settings` → `reminders`).
+    PanelSection(&'static str, &'static str),
+    /// Сделать скриншот: это умеет движок, но не панель.
+    Screenshot,
     /// Показать второе кольцо (подкольцо «Инструменты»).
     Submenu,
     /// Вернуть основное кольцо.
@@ -55,10 +59,10 @@ pub const TOOLS: [Sector; 8] = [
     Sector { id: "terminal", label: "Терминал", target: Target::Panel("terminal"), phase: 7 },
     Sector { id: "media", label: "Медиа", target: Target::Panel("media"), phase: 4 },
     Sector { id: "translate", label: "Перевод", target: Target::Panel("translate"), phase: 6 },
-    Sector { id: "timer", label: "Таймер", target: Target::Soon, phase: 7 },
-    Sector { id: "reminders", label: "Напоминания", target: Target::Soon, phase: 7 },
+    Sector { id: "timer", label: "Таймер", target: Target::PanelSection("settings", "reminders"), phase: 7 },
+    Sector { id: "reminders", label: "Напоминания", target: Target::PanelSection("settings", "reminders"), phase: 7 },
     Sector { id: "files", label: "Поиск файлов", target: Target::Soon, phase: 8 },
-    Sector { id: "shot", label: "Скриншот", target: Target::Soon, phase: 7 },
+    Sector { id: "shot", label: "Скриншот", target: Target::Screenshot, phase: 7 },
     Sector { id: "back", label: "Назад", target: Target::Back, phase: 0 },
 ];
 
@@ -77,6 +81,7 @@ pub fn find(id: &str) -> Option<&'static Sector> {
 pub fn panel_of(sector: &Sector) -> Option<&'static str> {
     match sector.target {
         Target::Panel(name) => Some(name),
+        Target::PanelSection(name, _) => Some(name),
         _ => None,
     }
 }
@@ -187,5 +192,44 @@ mod tests {
         assert_eq!(find("media").map(|s| s.label), Some("Медиа"));
         assert!(!SECTORS.iter().any(|s| panel_of(s) == Some("media")));
         assert!(TOOLS.iter().any(|s| panel_of(s) == Some("media")));
+    }
+
+    #[test]
+    fn timer_and_reminders_open_the_reminders_section() {
+        // Напоминания умеют ставиться голосом и из настроек; секторы кольца
+        // должны вести именно туда, а не в «Настройки» вообще.
+        for id in ["timer", "reminders"] {
+            let sector = find(id).unwrap_or_else(|| panic!("нет сектора «{id}»"));
+            assert_eq!(
+                sector.target,
+                Target::PanelSection("settings", "reminders"),
+                "«{id}» ведёт не в раздел напоминаний"
+            );
+            assert_eq!(panel_of(sector), Some("settings"));
+        }
+    }
+
+    #[test]
+    fn screenshot_sector_is_alive() {
+        // Скриншот умеет движок с самого начала, но из кольца он был
+        // «в разработке». Сектор обязан быть живым и не притворяться панелью.
+        let shot = find("shot").expect("нет сектора «Скриншот»");
+        assert_eq!(shot.target, Target::Screenshot);
+        assert_eq!(panel_of(shot), None);
+    }
+
+    #[test]
+    fn only_unfinished_sectors_say_they_are_unfinished() {
+        // Честность кольца: «в разработке» говорят только те пункты, за
+        // которыми действительно ничего нет. Напоминания и скриншот уже есть.
+        let soon: Vec<&str> = SECTORS
+            .iter()
+            .chain(TOOLS.iter())
+            .filter(|s| s.target == Target::Soon)
+            .map(|s| s.id)
+            .collect();
+        assert!(!soon.contains(&"reminders"), "напоминания уже сделаны");
+        assert!(!soon.contains(&"timer"), "таймер ведёт в напоминания");
+        assert!(!soon.contains(&"shot"), "скриншот уже работает");
     }
 }

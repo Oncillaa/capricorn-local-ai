@@ -255,6 +255,9 @@ static LINES: Lazy<Vec<(&'static str, &'static [&'static str])>> = Lazy::new(|| 
             "Щёлк. Скриншот в «Изображениях», папка Capri.",
             "Готово, скриншот в «Изображениях». Я на нём хорошо вышла?",
         ]),
+        ("screenshot_fail", &[
+            "Не получилось снять экран. Попробуй ещё раз — иногда помогает.",
+        ]),
         ("no_mic", &["Я тебя не слышу. Проверь микрофон и разрешение на него в настройках Windows."]),
         ("model_broken", &[
             "Модель распознавания речи не открылась, поэтому я тебя не слышу. Перенеси мою папку \
@@ -488,7 +491,8 @@ mod tests {
             "zapret_restart", "zapret_manual", "zapret_fail", "updates", "browser_missing",
             "remember_site", "remember_app", "remember_noname", "remember_nosite", "remember_noapp",
             "remember_fail", "reply_saved", "forget_ok", "forget_missing", "site_unknown",
-            "closed_window", "closed", "not_running", "time", "date", "screenshot", "no_mic",
+            "closed_window", "closed", "not_running", "time", "date", "screenshot",
+            "screenshot_fail", "no_mic",
             "model_broken", "no_model", "crash",
         ] {
             assert!(!variants(key).is_empty(), "нет реплики «{key}»");

@@ -40,6 +40,23 @@ const capri = {
 
 window.capri = capri;
 
+/**
+ * Перейти в раздел по имени — снаружи, из ядра.
+ *
+ * Кольцевому меню нужно открыть не просто «Настройки», а сразу нужный
+ * раздел: сектор «Напоминания» обязан приводить в напоминания. Если страница
+ * ещё не собрана (ядро успело раньше загрузки), просьба ждёт в
+ * `pendingSection` и применяется на `DOMContentLoaded`.
+ */
+capri.selectSection = function selectSectionFromOutside(key) {
+  if (!key) return;
+  if (document.readyState === 'loading') {
+    capri.pendingSection = key;
+    return;
+  }
+  if (typeof selectSection === 'function') selectSection(key);
+};
+
 // ---------------------------------------------------------------------------
 // Разделы левого меню. Порядок — как на скриншоте настроек.
 // `phase` — фаза плана (ПЛАН.md), после которой раздел становится живым.
@@ -767,4 +784,11 @@ document.addEventListener('DOMContentLoaded', () => {
   wire();
   capri.status('ожидаю состояние от ядра…');
   capri.post('ready');
+
+  // Ядро могло попросить раздел до того, как страница собралась.
+  if (capri.pendingSection) {
+    const wanted = capri.pendingSection;
+    capri.pendingSection = null;
+    if (typeof selectSection === 'function') selectSection(wanted);
+  }
 });

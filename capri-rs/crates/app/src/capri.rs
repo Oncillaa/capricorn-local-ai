@@ -738,7 +738,38 @@ impl Capri {
                     capri_core::menu::Target::Panel(panel) if panel_is_ready(panel) => {
                         self.handle_job(Job::OpenPanel(panel.to_string()))
                     }
-                    capri_core::menu::Target::Panel(_) | capri_core::menu::Target::Soon => {
+                    // Панель и её раздел: сначала открываем, потом просим
+                    // страницу перейти в нужный раздел. Без перехода человек
+                    // попадал бы в «Настройки», а не в «Напоминания».
+                    capri_core::menu::Target::PanelSection(panel, section)
+                        if panel_is_ready(panel) =>
+                    {
+                        self.handle_job(Job::OpenPanel(panel.to_string()));
+                        if let Some(id) = capri_panels::PanelId::parse(panel) {
+                            // Раздел просим отдельным приказом: панель может
+                            // быть ещё не загружена, и тогда `Section` ждёт,
+                            // пока страница попросит состояние.
+                            let _ = self.panels.send(capri_panels::Command::Section(id, section));
+                        }
+                        log::info!("Меню: «{}» → {panel}/{section}", sector.label);
+                        false
+                    }
+                    capri_core::menu::Target::Screenshot => {
+                        self.summon();
+                        match self.platform.screenshot() {
+                            Ok(path) => {
+                                log::info!("Скриншот из меню: {}", path.display());
+                                self.handle_job(Job::Say(line("screenshot", &[])))
+                            }
+                            Err(why) => {
+                                log::warn!("Скриншот не вышел: {why}");
+                                self.handle_job(Job::Say(line("screenshot_fail", &[])))
+                            }
+                        }
+                    }
+                    capri_core::menu::Target::Panel(_)
+                    | capri_core::menu::Target::PanelSection(_, _)
+                    | capri_core::menu::Target::Soon => {
                         let text = format!(
                             "«{}» ещё в разработке — она появится на фазе {}.",
                             sector.label, sector.phase

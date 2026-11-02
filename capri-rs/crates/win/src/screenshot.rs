@@ -245,7 +245,36 @@ pub fn capture_screen() -> Result<PathBuf, String> {
 }
 
 /// Метка времени для имён файлов: `2026-10-30_18-04-12`.
+///
+/// Время **местное**: человек ищет скриншот, снятый «в пять минут седьмого»,
+/// а не «в шестнадцать ноль пять UTC». Раньше здесь были секунды от эпохи, и
+/// файл назывался на три часа раньше, чем показывали часы.
 pub fn stamp() -> String {
+    #[cfg(windows)]
+    {
+        return local_stamp();
+    }
+    #[cfg(not(windows))]
+    {
+        utc_stamp()
+    }
+}
+
+#[cfg(windows)]
+fn local_stamp() -> String {
+    // SAFETY: `GetLocalTime` ничего не читает из памяти вызывающего и не может
+    // вернуть ошибку — она просто отдаёт текущее местное время.
+    let time = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    format!(
+        "{:04}-{:02}-{:02}_{:02}-{:02}-{:02}",
+        time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond
+    )
+}
+
+/// Запасной вариант для не-Windows: там своего «местного» без часового пояса
+/// взять неоткуда, поэтому честно UTC.
+#[cfg(not(windows))]
+fn utc_stamp() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -283,5 +312,24 @@ mod tests {
     fn date_math() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(19_000), (2022, 1, 8));
+    }
+
+    #[test]
+    fn stamp_looks_like_a_name_a_human_can_sort() {
+        // Метка попадает в имя файла: «скриншот_2026-11-01_23-15-13.png».
+        // Проверяем форму — а то, что время местное, а не UTC, видно только
+        // на живой машине со сдвигом пояса.
+        let stamp = stamp();
+        let parts: Vec<&str> = stamp.split(['-', '_']).collect();
+        assert_eq!(parts.len(), 6, "не та метка: {stamp}");
+        assert_eq!(parts[0].len(), 4, "год не влез: {stamp}");
+        assert_eq!(parts[1].len(), 2, "месяц не влез: {stamp}");
+        assert_eq!(parts[2].len(), 2, "день не влез: {stamp}");
+        let month: u32 = parts[1].parse().expect("месяц — число");
+        let day: u32 = parts[2].parse().expect("день — число");
+        let hour: u32 = parts[3].parse().expect("час — число");
+        assert!((1..=12).contains(&month), "месяц вне года: {stamp}");
+        assert!((1..=31).contains(&day), "день вне месяца: {stamp}");
+        assert!(hour < 24, "час вне суток: {stamp}");
     }
 }

@@ -288,6 +288,16 @@ fn run(base_dir: PathBuf) -> i32 {
         }
     }
 
+    // Отладка кольца: `CAPRI_RADIAL=shot` — то же, что клик по сектору.
+    // Без этого проверить секторы можно только мышью по кольцу, а оно
+    // закрывается при потере фокуса.
+    if let Ok(id) = std::env::var("CAPRI_RADIAL") {
+        if !id.trim().is_empty() {
+            log::write_line("INFO", &format!("CAPRI_RADIAL: {}", id.trim()));
+            let _ = requests_for_panel.send(UiRequest::RadialAction(id.trim().to_string()));
+        }
+    }
+
     // Ядро работает в своём потоке, окно — в главном: Windows требует,
     // чтобы окно жило именно в том потоке, который его создал. О завершении
     // сообщает канал: так главный поток может подождать с пределом, а не

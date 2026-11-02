@@ -48,6 +48,8 @@ pub fn run(commands: Receiver<Command>, events: Sender<PanelEvent>) -> i32 {
 
     let mut panels: HashMap<PanelId, PanelWindow> = HashMap::new();
     let mut by_window: HashMap<WindowId, PanelId> = HashMap::new();
+    // Раздел, которого ждёт панель: применим при первом же `Eval`.
+    let mut wanted_section: HashMap<PanelId, &'static str> = HashMap::new();
 
     event_loop.run_return(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -93,8 +95,33 @@ pub fn run(commands: Receiver<Command>, events: Sender<PanelEvent>) -> i32 {
                 }
             }
 
+            Event::UserEvent(Command::Section(id, section)) => {
+                // Просьбу держим всегда: `evaluate_script` не говорит, успела
+                // ли страница загрузиться, и скрипт в свежем окне молча
+                // пропал бы. Зато он выполнится при первом `Eval` — а он
+                // приходит ровно тогда, когда страница попросила состояние.
+                wanted_section.insert(id, section);
+                if let Some(panel) = panels.get(&id) {
+                    // Панель могла быть уже открыта раньше: тогда `ready` не
+                    // придёт, и ждать нечего — переключаем сейчас.
+                    let js = section_js(section);
+                    if let Err(e) = panel.webview.evaluate_script(&js) {
+                        log::debug!("Панель «{}»: раздел не переключился: {e}", id.as_str());
+                    }
+                }
+            }
+
             Event::UserEvent(Command::Eval(id, js)) => {
                 if let Some(panel) = panels.get(&id) {
+                    // Раздел применяем до состояния: страница сначала
+                    // переключится, потом нарисует данные.
+                    let js = match wanted_section.remove(&id) {
+                        Some(section) => {
+                            log::info!("Панель «{}»: перехожу в раздел «{section}»", id.as_str());
+                            format!("{}\n{js}", section_js(section))
+                        }
+                        None => js,
+                    };
                     if let Err(e) = panel.webview.evaluate_script(&js) {
                         log::warn!("Панель «{}»: скрипт не выполнился: {e}", id.as_str());
                     }
@@ -174,6 +201,13 @@ fn open_panel<T: 'static>(
     window.set_focus();
 
     Ok(PanelWindow { window, webview })
+}
+
+/// Скрипт «перейди в раздел». Имя приходит из кольца, поэтому подставляется
+/// как JSON-строка, а не склейкой кавычек.
+fn section_js(section: &str) -> String {
+    let name = serde_json::to_string(section).unwrap_or_else(|_| "\"\"".into());
+    format!("window.capri && window.capri.selectSection && window.capri.selectSection({name});")
 }
 
 /// Отдать файл интерфейса по пути из `capri://localhost/...`.
