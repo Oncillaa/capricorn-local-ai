@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use capri_core::engine::Engine;
+use capri_core::notes::{self, NoteBook, NoteStore};
 use capri_core::persona::{self, line};
 use capri_core::reminders::{self, Book, Store};
 use capri_core::save::SaveManager;
@@ -285,6 +286,9 @@ pub struct Capri {
     /// Напоминания: книга в памяти и её файл рядом с `config.json`.
     reminders: Book,
     reminder_store: Store,
+    /// Заметки: та же схема, что у напоминаний — книга и её файл.
+    notes: NoteBook,
+    note_store: NoteStore,
 }
 
 impl Capri {
@@ -341,6 +345,8 @@ impl Capri {
         // они должны ждать его и в следующий раз.
         let reminder_store = Store::new(&deps.base_dir);
         let reminders = reminder_store.load();
+        let note_store = NoteStore::new(&deps.base_dir);
+        let notes = note_store.load();
 
         let capri = Self {
             base_dir: deps.base_dir.clone(),
@@ -368,6 +374,8 @@ impl Capri {
             follow_up_after_speech: false,
             reminders,
             reminder_store,
+            notes,
+            note_store,
         };
         (capri, jobs_rx, bridge)
     }
@@ -1261,6 +1269,15 @@ impl Capri {
             return;
         }
 
+        // Заметки — по той же причине: текст записывается в наш файл, и
+        // пересказ нейросети здесь только помешал бы.
+        if let Some(reply) = self.try_notes(&command) {
+            self.save.reward();
+            self.follow_up_after_speech = true;
+            self.say(&reply);
+            return;
+        }
+
         let mut reply = self.engine.handle(&command);
 
         // Награда за понятую команду.
@@ -1406,6 +1423,59 @@ impl Capri {
             text
         );
         Some(reminders::confirm(&text, due, now))
+    }
+
+    /// Понять просьбу про заметки. `Some(фраза)` — ответ уже готов.
+    ///
+    /// Как и напоминания, живёт в оболочке: текст уходит в наш файл, а не в
+    /// модель. Фразы собирает [`capri_core::notes`] — их покрывают тесты.
+    fn try_notes(&mut self, command: &str) -> Option<String> {
+        let low = command.to_lowercase();
+
+        // «что в заметках», «покажи заметки», «найди в заметках хлеб».
+        if notes::asks_about_notes(&low) {
+            // «найди в заметках про хлеб» — поиск, а не весь список.
+            let query = notes::search_query(&low);
+            return Some(match query {
+                Some(query) => {
+                    let hits = self.notes.find(&query);
+                    notes::found(&query, &hits)
+                }
+                None => notes::list(&self.notes),
+            });
+        }
+
+        // «удали заметку про хлеб», «убери все заметки».
+        if let Some(what) = notes::asked_to_remove(&low) {
+            let reply = match what {
+                None => {
+                    let count = self.notes.clear();
+                    let _ = self.note_store.save(&self.notes);
+                    log::info!("Заметки: убрала все ({count})");
+                    notes::removed_all(count)
+                }
+                Some(query) => match self.notes.find(&query).first().map(|n| (n.id, n.text.clone())) {
+                    Some((id, text)) => {
+                        self.notes.remove(id);
+                        let _ = self.note_store.save(&self.notes);
+                        log::info!("Заметка убрана: {text}");
+                        notes::removed(Some(&text))
+                    }
+                    None => notes::removed(None),
+                },
+            };
+            return Some(reply);
+        }
+
+        // «запиши: купить хлеб», «запомни, что я люблю кофе».
+        let body = notes::requested(command)?;
+        if body.trim().is_empty() {
+            return Some(notes::ask_what().to_string());
+        }
+        let id = self.notes.add(body.clone(), notes::now_secs());
+        let _ = self.note_store.save(&self.notes);
+        log::info!("Заметка #{id}: {body}");
+        Some(notes::saved(&body))
     }
 
     /// Сказать всё, что уже наступило. Тик главного цикла.

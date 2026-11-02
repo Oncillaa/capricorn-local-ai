@@ -13,6 +13,7 @@ pub mod engine;
 pub mod exec;
 pub mod keys;
 pub mod menu;
+pub mod notes;
 pub mod persona;
 pub mod platform;
 pub mod reminders;
