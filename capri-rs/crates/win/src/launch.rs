@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use capri_core::platform::InstalledProgram;
-use capri_core::util::{norm, sounds_like, stem, translit};
+use capri_core::util::{norm, sounds_like, translit};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
@@ -445,12 +445,20 @@ fn fs2_space(path: &str) -> Result<(u64, u64), ()> {
 }
 
 /// Ограниченный поиск папки или файла по имени в профиле пользователя.
+///
+/// Имя сравнивается целиком, без грубого стеммера: он отрезает хвосты
+/// прилагательных и на именах файлов вредит. «пробный отчёт капри» после
+/// стеммера превращалось в «пробн отчёт капр», имя файла — тоже, но по
+/// последнему слову они уже не совпадали: «капр» против «капри». Поэтому
+/// здесь только регистр и «ё → е», а мягкие сравнения — транслит и звук.
+/// Точное совпадение всегда побеждает: неточное запоминается и берётся,
+/// только если ничего лучшего не нашлось.
 pub fn search_file(name: &str) -> Option<PathBuf> {
-    let wanted_stem = stem(&name);
-    if wanted_stem.is_empty() {
+    let wanted = flat(name);
+    if wanted.is_empty() {
         return None;
     }
-    let wanted_translit = translit(&wanted_stem);
+    let wanted_translit = translit(&wanted);
     let roots: Vec<PathBuf> = [dirs::desktop_dir(), dirs::document_dir(), dirs::download_dir(), dirs::home_dir()]
         .into_iter()
         .flatten()
@@ -458,11 +466,12 @@ pub fn search_file(name: &str) -> Option<PathBuf> {
 
     let started = std::time::Instant::now();
     let mut budget = 60_000usize;
+    let mut loose: Option<PathBuf> = None;
     for root in roots {
         let mut stack = vec![(root, 0usize)];
         while let Some((dir, depth)) = stack.pop() {
             if budget == 0 || started.elapsed() > std::time::Duration::from_secs(2) {
-                return None;
+                return loose;
             }
             let Ok(entries) = std::fs::read_dir(&dir) else { continue };
             for entry in entries.flatten() {
@@ -472,12 +481,24 @@ pub fn search_file(name: &str) -> Option<PathBuf> {
                 if file_name.starts_with('.') || file_name == "node_modules" || file_name == "appdata" {
                     continue;
                 }
-                let candidate_stem = stem(path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default().as_str());
-                let hit = candidate_stem == wanted_stem
-                    || (!wanted_translit.is_empty() && translit(&candidate_stem) == wanted_translit)
-                    || sounds_like(&candidate_stem, &wanted_stem);
-                if hit {
+                let candidate = flat(
+                    path.file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                        .as_str(),
+                );
+                if candidate == wanted
+                    || (!wanted_translit.is_empty() && translit(&candidate) == wanted_translit)
+                {
                     return Some(path);
+                }
+                // Человек редко помнит имя целиком: «пробный отчёт» вместо
+                // «пробный отчёт капри». Такой файл запоминаем, но отдаём
+                // только если точного совпадения нет нигде.
+                if loose.is_none()
+                    && (candidate.starts_with(&wanted) || sounds_like(&candidate, &wanted))
+                {
+                    loose = Some(path.clone());
                 }
                 if path.is_dir() && depth < 6 {
                     stack.push((path, depth + 1));
@@ -485,7 +506,17 @@ pub fn search_file(name: &str) -> Option<PathBuf> {
             }
         }
     }
-    None
+    loose
+}
+
+/// Имя для сравнения: нижний регистр, «ё → е», пробелы и подчёркивания — врозь.
+fn flat(name: &str) -> String {
+    name.to_lowercase()
+        .replace('ё', "е")
+        .replace(['_', '-'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Микрофоны (устройства записи) для меню «Микрофон».
@@ -500,5 +531,29 @@ pub fn audio_input_devices() -> Vec<String> {
             .filter(|l| !l.is_empty())
             .collect(),
         Err(_) => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_names_are_compared_whole() {
+        // Регистр и «ё» не должны мешать: «пробный отчёт» и «пробный отчет» —
+        // одно и то же имя файла, так его и слышит распознавание речи.
+        assert_eq!(flat("Пробный Отчёт"), "пробный отчет");
+        // Подчёркивания и дефисы — тоже разделители, а не буквы.
+        assert_eq!(flat("мой_отчёт-2026"), "мой отчет 2026");
+        assert_eq!(flat("  куча   пробелов  "), "куча пробелов");
+        assert_eq!(flat(""), "");
+    }
+
+    #[test]
+    fn file_names_are_not_stemmed() {
+        // Грубый стеммер отрезал бы «и» и «й», и «капри» превратилось бы в
+        // «капр». Для имён файлов это вредило: поиск не находил свой же файл.
+        assert_eq!(flat("капри"), "капри");
+        assert_eq!(flat("отчёт"), "отчет");
     }
 }

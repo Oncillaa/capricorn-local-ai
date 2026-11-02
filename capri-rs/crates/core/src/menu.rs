@@ -18,6 +18,11 @@ pub enum Target {
     PanelSection(&'static str, &'static str),
     /// Сделать скриншот: это умеет движок, но не панель.
     Screenshot,
+    /// Спросить, что искать на диске, и открыть окно прослушивания.
+    ///
+    /// Панели у поиска файлов нет: результат — сам файл, который открывается
+    /// тем, чем открывается. Сектору достаточно спросить имя и послушать.
+    FileSearch,
     /// Показать второе кольцо (подкольцо «Инструменты»).
     Submenu,
     /// Вернуть основное кольцо.
@@ -61,7 +66,7 @@ pub const TOOLS: [Sector; 8] = [
     Sector { id: "translate", label: "Перевод", target: Target::Panel("translate"), phase: 6 },
     Sector { id: "timer", label: "Таймер", target: Target::PanelSection("settings", "reminders"), phase: 7 },
     Sector { id: "reminders", label: "Напоминания", target: Target::PanelSection("settings", "reminders"), phase: 7 },
-    Sector { id: "files", label: "Поиск файлов", target: Target::Soon, phase: 8 },
+    Sector { id: "files", label: "Поиск файлов", target: Target::FileSearch, phase: 8 },
     Sector { id: "shot", label: "Скриншот", target: Target::Screenshot, phase: 7 },
     Sector { id: "back", label: "Назад", target: Target::Back, phase: 0 },
 ];
@@ -227,6 +232,14 @@ mod tests {
     }
 
     #[test]
+    fn file_search_sector_asks_instead_of_promising_a_phase() {
+        // Поиск файлов не панель, но и не «фаза 8»: сектор спрашивает имя.
+        let files = find("files").expect("нет сектора «Поиск файлов»");
+        assert_eq!(files.target, Target::FileSearch);
+        assert_eq!(panel_of(files), None);
+    }
+
+    #[test]
     fn only_unfinished_sectors_say_they_are_unfinished() {
         // Честность кольца: «в разработке» говорят только те пункты, за
         // которыми действительно ничего нет. Напоминания и скриншот уже есть.
@@ -239,5 +252,7 @@ mod tests {
         assert!(!soon.contains(&"reminders"), "напоминания уже сделаны");
         assert!(!soon.contains(&"timer"), "таймер ведёт в напоминания");
         assert!(!soon.contains(&"shot"), "скриншот уже работает");
+        assert!(!soon.contains(&"files"), "поиск файлов уже работает");
+        assert!(!soon.contains(&"notes"), "заметки уже работают");
     }
 }

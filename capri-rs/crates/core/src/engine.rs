@@ -664,6 +664,13 @@ fn build_routes() -> Vec<(Regex, Handler)> {
         ),
         (re(r"(?i)^(создай|сделай|создать) (?P<what>.*(папк|файл|документ|таблиц).*)$"), h_create),
         (
+            // «найди файл отчёт», «где файл презентация», «найди папку проекты».
+            // Ставим это ДО поиска в интернете: иначе «найди файл …» уходило
+            // в Google и человек получал выдачу вместо своего же документа.
+            re(r"(?i)^(найди|поищи|где( лежит| находится)?|отыщи|ищи)( мне)? (?P<kind>файл\w*|папк\w*|документ\w*|таблиц\w*)\s+(?P<q>.+)$"),
+            h_find_file,
+        ),
+        (
             re(r"(?i)^(найди|покажи|открой|загугли|погугли|поищи)( мне)?( в интернете| в гугле)? (фото\w*|фотк\w*|картинк\w*|изображени\w*|пикч\w*|обои)( (с|со|про|о|об|на тему))? (?P<q>.+)$"),
             h_images,
         ),
@@ -1263,6 +1270,77 @@ fn create_in(
     }
 }
 
+/// Найти файл или папку по имени и открыть.
+///
+/// Ищем только в своих местах (рабочий стол, документы, загрузки, домашняя
+/// папка) — так делает [`capri_core::platform::Platform::search_file`]. Чужой
+/// диск целиком не обшариваем: это секунды ожидания и мешок неожиданных
+/// совпадений.
+fn h_find_file(e: &mut Engine, _c: &str, m: Option<&regex::Captures>) -> Option<Reply> {
+    let query = m.and_then(|c| c.name("q")).map(|q| q.as_str().trim().to_string())?;
+    let query = query.trim_matches(|c: char| matches!(c, '.' | '!' | '?' | ',' | ';')).to_string();
+    if query.is_empty() {
+        return Some(Reply::say(line("file_ask", &[])));
+    }
+
+    // «найди папку документы» — ищем папку, а не первое, что похоже по имени:
+    // иначе на «документы» открывался файл «Документ.rtf». Слово «папка»
+    // приходит в kind, а не в запросе — смотрим туда.
+    let kind = m
+        .and_then(|c| c.name("kind"))
+        .map(|k| k.as_str().to_lowercase())
+        .unwrap_or_default();
+    let wants_folder = kind.starts_with("папк");
+    let bare = strip_folder_word(&query);
+
+    let found = if wants_folder {
+        find_folder(e, &bare, true).filter(|p| p.is_dir())
+    } else {
+        // Сначала известные папки: «загрузки» должно находить системную
+        // «Downloads», даже если такой папки в профиле ещё нет, — поиск по
+        // диску её бы не нашёл.
+        e.platform
+            .search_file(&bare)
+            .or_else(|| find_folder(e, &bare, true))
+    };
+    let Some(path) = found else {
+        return Some(Reply::say(line("file_missing", &[("t", &query)])));
+    };
+
+    let name = path
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| query.clone());
+    // И папку, и файл открывает оболочка: папка попадёт в проводник, файл —
+    // в свою программу. Отдельного «показать в проводнике» здесь не нужно.
+    if e.platform.open_url(&path.to_string_lossy(), None).is_err() {
+        return Some(Reply::say(line("file_failed", &[("t", &name)])));
+    }
+
+    // Дописываем, где лежит: имя без места человеку мало помогает.
+    let place = path
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    Some(Reply::say(line("file_open", &[("t", &name), ("where", &place)])))
+}
+
+/// Убрать слово «папка» из запроса: дальше имя ищут по чистому названию.
+///
+/// «папка документы» → «документы». Без этого в имя попадало служебное слово
+/// и совпадений не было ни с чем.
+fn strip_folder_word(query: &str) -> String {
+    let words: Vec<&str> = query
+        .split_whitespace()
+        .filter(|w| !w.to_lowercase().starts_with("папк"))
+        .collect();
+    if words.is_empty() {
+        query.to_string()
+    } else {
+        words.join(" ")
+    }
+}
+
 fn h_images(e: &mut Engine, c: &str, m: Option<&regex::Captures>) -> Option<Reply> {
     let mut q = m.and_then(|c| c.name("q")).map(|q| q.as_str().trim().to_string())?;
     if c.contains("обои") {
@@ -1787,6 +1865,22 @@ fn capitalize(s: &str) -> String {
     out
 }
 
+/// Русское название системной папки по её роли.
+///
+/// Папка зовётся «Downloads», а человек говорит «загрузки» — без этой пары
+/// «где папка загрузки» не находило ничего.
+fn known_folder_word(role: &str) -> &'static str {
+    match role {
+        "pictures" => "изображения",
+        "documents" => "документы",
+        "downloads" => "загрузки",
+        "desktop" => "рабочий стол",
+        "music" => "музыка",
+        "videos" => "видео",
+        _ => "",
+    }
+}
+
 /// Найти папку по названию: известные папки, диски, потом поиск по диску.
 fn find_folder(e: &Engine, name: &str, search: bool) -> Option<PathBuf> {
     let key = norm(name);
@@ -1801,7 +1895,14 @@ fn find_folder(e: &Engine, name: &str, search: bool) -> Option<PathBuf> {
     for known in ["pictures", "documents", "downloads", "desktop", "music", "videos"] {
         if let Some(path) = e.platform.known_folder(known) {
             let folder_name = norm(&path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default());
-            if folder_name == key || crate::util::similarity(&folder_name, &key) > 0.8 {
+            // Папка называется «Downloads», а человек говорит «загрузки»:
+            // сверяем ещё и с русским именем самой папки этой роли.
+            let russian = norm(known_folder_word(known));
+            if folder_name == key
+                || russian == key
+                || crate::util::similarity(&folder_name, &key) > 0.8
+                || crate::util::similarity(&russian, &key) > 0.8
+            {
                 return Some(path);
             }
         }

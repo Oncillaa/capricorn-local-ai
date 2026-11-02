@@ -832,6 +832,18 @@ impl Capri {
                             }
                         }
                     }
+                    // Панели у поиска файлов нет, поэтому сектор просто
+                    // открывает окно прослушивания и спрашивает имя. Дальше
+                    // работает обычный разбор «найди файл …».
+                    capri_core::menu::Target::FileSearch => {
+                        self.summon();
+                        self.awake_until = Instant::now() + self.listen_window();
+                        let _ = self
+                            .bridge
+                            .events
+                            .send(UiEvent::Mode("listening".into(), self.listen_window().as_secs_f32()));
+                        self.handle_job(Job::Say(line("file_ask", &[])))
+                    }
                     capri_core::menu::Target::Panel(_)
                     | capri_core::menu::Target::PanelSection(_, _)
                     | capri_core::menu::Target::Soon => {
