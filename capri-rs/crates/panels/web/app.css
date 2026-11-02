@@ -1167,6 +1167,39 @@ input[type="range"]:disabled { opacity: 0.45; cursor: not-allowed; }
 .square.is-white .piece { color: #f4ecff; text-shadow: 0 0 10px rgba(232, 221, 247, 0.45); }
 .square.is-black .piece { color: #ff2e63; text-shadow: 0 0 2px #ff2e63, 0 0 10px rgba(255, 34, 96, 0.7); }
 
+/* Шашки — не фигуры: их рисует сам CSS кругом, а буква в клетке нужна
+   только чтобы понять, чья шашка и дамка ли она. Поэтому текст в клетке
+   прячем и рисуем круг с ободком и бликом. */
+.square.is-checker .piece {
+  width: 62%;
+  height: 62%;
+  border-radius: 50%;
+  font-size: 0;
+  background: radial-gradient(circle at 35% 30%, #fff6ff 0%, #efe3ff 45%, #b9a4dc 100%);
+  box-shadow:
+    inset 0 -2px 4px rgba(70, 40, 110, 0.55),
+    0 0 10px rgba(232, 221, 247, 0.4);
+}
+.square.is-checker.is-black .piece {
+  background: radial-gradient(circle at 35% 30%, #ff7ba1 0%, #ff2e63 45%, #a3103a 100%);
+  box-shadow:
+    inset 0 -2px 4px rgba(80, 0, 25, 0.6),
+    0 0 10px rgba(255, 34, 96, 0.6);
+}
+/* Дамка: тот же круг, но с золотым ободком и короной внутри. */
+.square.is-checker.is-crown .piece {
+  box-shadow:
+    inset 0 0 0 3px rgba(255, 209, 92, 0.95),
+    inset 0 -2px 4px rgba(70, 40, 110, 0.55),
+    0 0 12px rgba(255, 209, 92, 0.7);
+}
+.square.is-checker.is-crown .piece::before {
+  content: "♛";
+  font-size: 0.42em;
+  line-height: 1;
+  color: rgba(90, 55, 10, 0.85);
+}
+
 .square:hover { background: #33204d; }
 .square.is-selected {
   background: rgba(40, 255, 150, 0.24);

@@ -1629,16 +1629,12 @@ fn panel_dispatch(
                 if event.panel == capri_panels::PanelId::Media {
                     panels_snapshot::set_media_open(true);
                 }
-                // Шахматам и шашкам нужен не общий снимок ядра, а свои партии.
+                // Играм нужен не общий снимок ядра, а своя партия. Отдаём
+                // только шахматы: страница открывается на этой вкладке, а
+                // шашки попросит сама, когда человек переключится. Если
+                // отдать обе, победит последняя — и вкладка соврёт.
                 if event.panel == capri_panels::PanelId::Chess {
                     chess_action("chess-ready", &serde_json::Value::Null, &chess, base_dir, panels);
-                    checkers_action(
-                        "checkers-ready",
-                        &serde_json::Value::Null,
-                        &checkers,
-                        base_dir,
-                        panels,
-                    );
                     continue;
                 }
                 // Чату — своя история, а не общий снимок настроек.
@@ -1965,8 +1961,17 @@ fn panel_dispatch(
                 let _ = panels.send(capri_panels::Command::Eval(capri_panels::PanelId::Media, js));
             }
             // Шахматы: ходы и настройки партии.
+            "chess-ready" => {
+                chess_action("chess-ready", &serde_json::Value::Null, &chess, base_dir, panels);
+            }
             "chess-new" | "chess-move" | "chess-undo" | "chess-level" | "chess-side" => {
                 chess_action(event.action.as_str(), &event.data, &chess, base_dir, panels);            }
+            // Шашки: та же страница игр, другое действие. Без этой ветки
+            // клики по шашечной доске уходили в никуда, и игра стояла.
+            "checkers-ready" | "checkers-new" | "checkers-move" | "checkers-level"
+            | "checkers-side" => {
+                checkers_action(event.action.as_str(), &event.data, &checkers, base_dir, panels);
+            }
             "open-failed" => {
                 let why = event
                     .data

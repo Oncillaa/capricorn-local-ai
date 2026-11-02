@@ -1,9 +1,16 @@
 'use strict';
 
-// Доска шахмат. Договор с оболочкой тот же, что у остальных панелей:
-// `paint()` читает window.capri.state, ядро зовёт setState().
+// Доска игр: шахматы и шашки на одной странице. Договор с оболочкой тот же,
+// что у остальных панелей: `paint()` читает window.capri.state, ядро зовёт
+// setState().
 //
-// Состояние приходит так:
+// Игра выбирается по тому, какое поле пришло: state.chess или state.checkers.
+// Так ядру не нужно сообщать «какая игра сейчас», и разойтись они не могут.
+//
+// Доска у обеих игр одна: 64 кнопки, клетка хранит и шахматную фигуру, и
+// шашку. Что именно рисовать — решает пришедшее состояние.
+//
+// Состояние шахмат приходит так:
 //   state.chess = {
 //     squares: [{square:"e4", piece:"♟", kind:"pawn", color:"white"} | {square, piece:null}],
 //     moves:   [{from:"e2", to:"e4", uci:"e2e4", text:"e2-e4"}],
@@ -20,9 +27,23 @@
 //     comment: "фраза Капри",
 //   }
 //
-// Правила целиком живут в Rust: страница только показывает и отправляет
-// выбранный ход. Поэтому здесь нет ни генерации ходов, ни проверки шаха —
-// и разойтись с движком она не может.
+// Состояние шашек:
+//   state.checkers = {
+//     cells:   [["","b",…], …] — 8 строк по 8, строка 0 сверху (8-я горизонталь);
+//              "w"/"b" — простая, "W"/"B" — дамка, "" — пусто;
+//     moves:   [{from:"c3", to:"d4"}],
+//     turn:    "white" | "black",
+//     outcome: null | "white" | "black" | "draw",
+//     winner:  null | "white" | "black",
+//     ply: 0, white: 12, black: 12,
+//     my_side: "white", level: "normal",
+//     thinking: true|false, comment: "фраза Капри", history: ["c3-d4", …],
+//     money: 0, wins: 0, games: 0, draws: 0,
+//   }
+//
+// Правила обеих игр целиком живут в Rust: страница только показывает и
+// отправляет выбранный ход. Поэтому здесь нет ни генерации ходов, ни
+// проверки шаха или боя — и разойтись с движком она не может.
 
 /** Выбранная клетка: откуда игрок собирается ходить. */
 let selected = null;
@@ -30,6 +51,8 @@ let selected = null;
 let view = {};
 /** Отрисовка уже подтверждена ядру — чтобы не спамить лог. */
 let painted = false;
+/** Какая игра сейчас на доске: `chess` или `checkers`. */
+let game = 'chess';
 
 /** Построить 64 клетки один раз при загрузке. */
 function buildBoard() {
@@ -42,8 +65,11 @@ function buildBoard() {
       const cell = document.createElement('button');
       cell.className = 'square';
       cell.dataset.square = String.fromCharCode(97 + file) + rank;
-      // Светлые и тёмные поля в шахматном порядке.
-      if ((file + rank) % 2 === 0) cell.classList.add('is-dark');
+      // Тёмные поля — те, где (файл + номер горизонтали) чётные. В шахматах
+      // это a1: файл 0, горизонталь 1, сумма 1 — нечётная. Значит a1 тёмное,
+      // то есть «чётные» тут наоборот. Шашки ходят только по тёмным, и от
+      // этого зависит вся раскраска доски — проверить легко: a1 тёмное.
+      if ((file + rank) % 2 !== 0) cell.classList.add('is-dark');
       cell.innerHTML = '<span class="piece"></span>';
       cell.addEventListener('click', () => onCellClick(cell.dataset.square));
       board.appendChild(cell);
@@ -91,6 +117,10 @@ function myTurn() {
 
 /** Клик по клетке: выбрать фигуру или отправить ход. */
 function onCellClick(square) {
+  if (game === 'checkers') {
+    onCheckerClick(square);
+    return;
+  }
   if (!myTurn()) {
     window.capri.status(view.outcome ? 'партия закончена' : 'сейчас ходит Капри');
     return;
@@ -135,6 +165,233 @@ function sendMove(from, to) {
   window.capri.status(`ход ${from}-${to}…`);
 }
 
+// --- шашки ----------------------------------------------------------------
+//
+// Общая доска, но своя логика кликов и своя отрисовка. Всё, что касается
+// правил, приходит от ядра: список ходов, позиция, итог.
+
+/** Буква в клетке шашечной доски: «w», «b», «W», «B» или пусто. */
+function checkerAt(square) {
+  const file = square.charCodeAt(0) - 97;
+  const rank = Number(square.slice(1));
+  if (!(file >= 0 && file < 8 && rank >= 1 && rank <= 8)) return '';
+  const rows = Array.isArray(view.cells) ? view.cells : [];
+  const row = rows[8 - rank];
+  return row && typeof row[file] === 'string' ? row[file] : '';
+}
+
+/** Моя ли это шашка. В шашках цвет читается по регистру буквы. */
+function isMine(letter) {
+  if (!letter) return false;
+  return view.my_side === 'white'
+    ? letter === 'w' || letter === 'W'
+    : letter === 'b' || letter === 'B';
+}
+
+/**
+ * Клик по полю в шашках.
+ *
+ * Порядок тот же, что в шахматах, и по той же причине: сначала проверяем,
+ * не цель ли это уже выбранной шашки. У своего поля тоже есть ходы, и при
+ * обратной проверке вместо выбора отправился бы ход из прежнего поля.
+ */
+function onCheckerClick(square) {
+  if (!myTurn()) {
+    window.capri.status(view.outcome ? 'партия закончена' : 'сейчас ходит Капри');
+    return;
+  }
+
+  if (selected && targetsFrom(selected).some((m) => m.to === square)) {
+    sendCheckerMove(selected, square);
+    return;
+  }
+
+  if (selected === square) {
+    selected = null;
+    paintSelection();
+    return;
+  }
+
+  if (isMine(checkerAt(square))) {
+    selected = square;
+    paintSelection();
+    const count = targetsFrom(square).length;
+    window.capri.status(count ? `у шашки ${count} ход(ов)` : 'этой шашкой ходить нечем');
+  } else {
+    selected = null;
+    paintSelection();
+  }
+}
+
+/** Отправить ход ядру. Правила и серию взятий проверит Rust. */
+function sendCheckerMove(from, to) {
+  window.capri.post('checkers-move', { from, to });
+  selected = null;
+  paintSelection();
+  window.capri.status(`ход ${from}-${to}…`);
+}
+
+/** Нарисовать позицию шашек. */
+function paintCheckers(state) {
+  view = state.checkers || view;
+
+  document.querySelectorAll('.square').forEach((cell) => {
+    const letter = checkerAt(cell.dataset.square);
+    // Шашка рисуется кругом через CSS, буква нужна только для цвета и дамки.
+    cell.querySelector('.piece').textContent = '';
+    cell.classList.toggle('is-checker', Boolean(letter));
+    cell.classList.toggle('is-crown', letter === 'W' || letter === 'B');
+    cell.classList.toggle('is-white', letter === 'w' || letter === 'W');
+    cell.classList.toggle('is-black', letter === 'b' || letter === 'B');
+    // Шаха в шашках не бывает — снимаем след от шахматной партии.
+    cell.classList.remove('is-check');
+    if (letter) {
+      cell.dataset.color = letter === 'w' || letter === 'W' ? 'white' : 'black';
+    } else {
+      delete cell.dataset.color;
+    }
+  });
+
+  // Последний ход: в истории он записан как «c3-d4» или «c3:d4».
+  const last = Array.isArray(view.history) && view.history.length
+    ? String(view.history[view.history.length - 1]).split(/[-:]/)
+    : [];
+  document.querySelectorAll('.square').forEach((cell) => {
+    cell.classList.toggle('is-last', last.indexOf(cell.dataset.square) >= 0);
+  });
+
+  if (document.getElementById('chip-balance')) {
+    document.getElementById('chip-balance').textContent = (Number(view.money) || 0) + ' ECS';
+  }
+
+  // Вместо шахматного материала — перевес по шашкам.
+  const materialNode = document.getElementById('material');
+  if (materialNode) {
+    const diff = (Number(view.white) || 0) - (Number(view.black) || 0);
+    materialNode.textContent =
+      diff === 0
+        ? 'шашки: поровну'
+        : 'шашки: ' + (diff > 0 ? '+' : '') + diff + (diff > 0 ? ' у белых' : ' у чёрных');
+  }
+
+  const plyNode = document.getElementById('ply-count');
+  if (plyNode) plyNode.textContent = 'ходов: ' + (Number(view.ply) || 0);
+
+  const turnBar = document.getElementById('turn-bar');
+  if (turnBar) {
+    const mine = view.turn === view.my_side;
+    turnBar.textContent = view.outcome
+      ? 'партия закончена'
+      : view.thinking
+        ? 'Капри думает…'
+        : mine
+          ? 'твой ход (' + (view.my_side === 'white' ? 'белые' : 'чёрные') + ')'
+          : 'ход Капри';
+    turnBar.classList.toggle('is-mine', Boolean(mine) && !view.outcome && !view.thinking);
+  }
+
+  const moves = Array.isArray(view.history) ? view.history : [];
+  document.getElementById('move-count').textContent = String(moves.length);
+  document.getElementById('moves').innerHTML = moves
+    .map((text, index) => `<li>${window.capri.esc(String(index + 1))}. ${window.capri.esc(text)}</li>`)
+    .join('');
+
+  document.getElementById('comment').textContent = view.comment || '…';
+
+  const score = document.getElementById('score');
+  if (score) {
+    const wins = Number(view.wins) || 0;
+    const games = Number(view.games) || 0;
+    const draws = Number(view.draws) || 0;
+    score.textContent =
+      'Счёт против Капри: ' + wins + ' побед · ' + (games - wins - draws) + ' поражений · ' + draws + ' ничьих';
+  }
+
+  const levelBtn = document.getElementById('level-btn');
+  if (levelBtn) {
+    const names = { easy: 'ЛЁГКАЯ', normal: 'ОБЫЧНАЯ', hard: 'СЛОЖНАЯ' };
+    levelBtn.textContent = 'СЛОЖНОСТЬ: ' + (names[view.level] || 'ОБЫЧНАЯ');
+  }
+
+  const banner = document.getElementById('banner');
+  if (view.outcome) {
+    banner.hidden = false;
+    banner.textContent =
+      view.outcome === 'draw'
+        ? 'НИЧЬЯ'
+        : view.winner === 'white'
+          ? 'БЕЛЫЕ ПОБЕДИЛИ'
+          : 'ЧЁРНЫЕ ПОБЕДИЛИ';
+  } else {
+    banner.hidden = true;
+    banner.textContent = '';
+  }
+
+  paintSelection();
+
+  if (!painted) {
+    painted = true;
+    window.capri.post('painted', { items: moves.length });
+  }
+
+  window.capri.status(
+    view.outcome
+      ? 'партия закончена — нажми «Новая партия»'
+      : view.thinking
+        ? 'Капри думает…'
+        : 'твой ход',
+  );
+}
+
+/**
+ * Переключить игру.
+ *
+ * Доска одна, меняется только её содержимое. Чистим её полностью: у шашек
+ * нет ни шаха, ни материала, и остатки шахматных классов только путали бы.
+ * Состояние нужной игры просим у ядра — страница его не выдумывает.
+ */
+function switchGame(next) {
+  if (next === game) return;
+  game = next;
+  selected = null;
+  painted = false;
+
+  document.querySelectorAll('.game-tab').forEach((tab) => {
+    tab.classList.toggle('is-active', tab.dataset.game === next);
+  });
+
+  document.querySelectorAll('.square').forEach((cell) => {
+    cell.querySelector('.piece').textContent = '';
+    cell.classList.remove(
+      'is-checker', 'is-crown', 'is-white', 'is-black', 'is-check',
+      'is-selected', 'is-target', 'is-last',
+    );
+    delete cell.dataset.color;
+  });
+  document.getElementById('moves').innerHTML = '';
+  document.getElementById('move-count').textContent = '0';
+  document.getElementById('banner').hidden = true;
+
+  window.capri.status(next === 'checkers' ? 'шашки: прошу позицию…' : 'шахматы: прошу позицию…');
+  // `ready` у панели один: игры различаются действием, а не страницей.
+  window.capri.post(next === 'checkers' ? 'checkers-ready' : 'chess-ready');
+}
+
+/**
+ * Привести вкладки и заголовок окна в соответствие с тем, что на доске.
+ *
+ * Без этого вкладка и доска могли разойтись: ядро решает, какое состояние
+ * прислать, а подсветку вкладки никто не обновлял — и на шашечной доске
+ * горела «ШАХМАТЫ».
+ */
+function markTab() {
+  document.querySelectorAll('.game-tab').forEach((tab) => {
+    tab.classList.toggle('is-active', tab.dataset.game === game);
+  });
+  document.title =
+    'CAPRI // ИГРЫ - ' + (game === 'checkers' ? 'ШАШКИ' : 'ШАХМАТЫ');
+}
+
 /** Подсветка выбора и доступных полей. */
 function paintSelection() {
   const cells = document.querySelectorAll('.square');
@@ -150,6 +407,18 @@ function paintSelection() {
 /** Нарисовать позицию. */
 function paint() {
   const state = window.capri.state || {};
+
+  // Какая игра пришла, ту и рисуем. Ядро отдаёт ровно одно из двух полей,
+  // поэтому «шахматы поверх шашек» получить нельзя.
+  if (state.checkers) {
+    game = 'checkers';
+    paintCheckers(state);
+    markTab();
+    return;
+  }
+  if (state.chess) {
+    game = 'chess';
+  }
   view = state.chess || view;
 
   buildBoard();
@@ -262,6 +531,7 @@ function paint() {
   }
 
   paintSelection();
+  markTab();
 
   // Подтверждение отрисовки: по этой строке в capri.log видно, что панель
   // живая, а не белое окно. Шлём один раз, иначе лог забьётся.
@@ -283,12 +553,19 @@ function paint() {
 
 window.capri.onAction('new-game', () => {
   selected = null;
-  window.capri.post('chess-new', { level: view.level || 'normal', side: view.my_side || 'white' });
+  // Партия начинается в той игре, которая сейчас на доске.
+  const action = game === 'checkers' ? 'checkers-new' : 'chess-new';
+  window.capri.post(action, { level: view.level || 'normal', side: view.my_side || 'white' });
 });
 
 window.capri.onAction('undo', () => {
   selected = null;
   // Отменяем пару: свой ход и ответ бота, иначе отменять придётся дважды.
+  // В шашках отмены нет — там правило боя, и откат его ломает.
+  if (game === 'checkers') {
+    window.capri.status('в шашках отмены нет — начни новую партию');
+    return;
+  }
   window.capri.post('chess-undo');
 });
 
@@ -297,19 +574,19 @@ window.capri.onAction('undo', () => {
 window.capri.onAction('cycle-level', () => {
   const order = ['easy', 'normal', 'hard'];
   const next = order[(order.indexOf(view.level) + 1) % order.length];
-  window.capri.post('chess-level', { level: next });
+  const action = game === 'checkers' ? 'checkers-level' : 'chess-level';
+  window.capri.post(action, { level: next });
 });
 
-// Вкладки игр: готовы только шахматы, остальные честно говорят об этом.
+// Вкладки игр: шахматы и шашки готовы, «Очко» честно говорит об этом.
 document.querySelectorAll('.game-tab').forEach((tab) => {
   tab.addEventListener('click', () => {
-    const game = tab.dataset.game;
-    if (game !== 'chess') {
+    const next = tab.dataset.game;
+    if (next !== 'chess' && next !== 'checkers') {
       window.capri.status('эта игра ещё в работе — загляни позже');
       return;
     }
-    document.querySelectorAll('.game-tab').forEach((t) => t.classList.remove('is-active'));
-    tab.classList.add('is-active');
+    switchGame(next);
   });
 });
 
