@@ -237,11 +237,12 @@ fn run(base_dir: PathBuf) -> i32 {
     // Медиа-виджет: пока он открыт, оболочка сама опрашивает плеер и шлёт
     // странице состояние и полосы эквалайзера. Обложку кэшируем — читать её
     // из SMTC каждые полсекунды дорого и незачем: она меняется вместе с треком.
+    let media_platform = Arc::new(capri_win::WindowsPlatform::new(base_dir.clone()));
     {
         let cfg = Arc::clone(&cfg);
         let panels_tx = panels_tx.clone();
         // Плеер нужен и Discord RPC, и виджету — берём ещё одну ссылку.
-        let media = Arc::new(capri_win::WindowsPlatform::new(base_dir.clone()));
+        let media = Arc::clone(&media_platform);
         std::thread::spawn(move || media_feeder(media, panels_tx, cfg));
     }
 
@@ -1620,6 +1621,9 @@ fn panel_dispatch(
     // Шашки живут рядом: у каждой игры своя партия, поэтому переключение
     // вкладок ничего не сбрасывает.
     let checkers = std::sync::Mutex::new(checkers_session::Session::default());
+    // Своя платформа для запросов к плееру: у потока опроса она своя, а
+    // разделять её через канал дороже, чем создать ещё одну.
+    let media_platform = capri_win::WindowsPlatform::new(base_dir.clone());
 
     for event in events {
         match event.action.as_str() {
@@ -1628,6 +1632,14 @@ fn panel_dispatch(
                 // Медиа-поток опрашивает плеер только пока окно открыто.
                 if event.panel == capri_panels::PanelId::Media {
                     panels_snapshot::set_media_open(true);
+                    // И сразу отдаём трек. Поток опрашивает плеер раз в
+                    // полсекунды, и до первого кадра страница показывала
+                    // «ничего не играет» с нерабочими кнопками — человек
+                    // успевал решить, что виджет сломан.
+                    let _ = panels.send(capri_panels::Command::Eval(
+                        capri_panels::PanelId::Media,
+                        media_state_js(&media_platform),
+                    ));
                 }
                 // Играм нужен не общий снимок ядра, а своя партия. Отдаём
                 // только шахматы: страница открывается на этой вкладке, а
@@ -2048,44 +2060,62 @@ fn media_feeder(
         }
         last_track = Instant::now();
 
-        let media = match platform.now_playing() {
-            Some(track) => {
-                // Новая обложка — только при смене трека.
-                let key = format!("{}\u{1}{}", track.title, track.artist);
-                if key != cover_title {
-                    cover_title = key;
-                    cover_url = capri_win::media::cover_data_url().unwrap_or_default();
-                }
-                serde_json::json!({
-                    "title": track.title,
-                    "artist": track.artist,
-                    "app": track.app,
-                    "playing": track.playing,
-                    "position": track.position,
-                    "duration": track.duration,
-                    "cover": cover_url,
-                })
+        // Обложку кэшируем по треку: перекодировать её каждые полсекунды
+        // незачем, это самая дорогая часть опроса.
+        if let Some(track) = platform.now_playing() {
+            let key = format!("{}\u{1}{}", track.title, track.artist);
+            if key != cover_title {
+                cover_title = key;
+                cover_url = capri_win::media::cover_data_url().unwrap_or_default();
             }
-            // Плеер молчит: страница покажет «Ничего не играет».
-            None => {
-                serde_json::json!({
-                    "title": "",
-                    "artist": "",
-                    "app": "",
-                    "playing": false,
-                    "position": 0.0,
-                    "duration": 0.0,
-                    "cover": "",
-                })
-            }
-        };
+        }
 
         let js = format!(
             "window.capri.setState({{ media: {} }});",
-            serde_json::to_string(&media).unwrap_or_else(|_| "{}".into())
+            serde_json::to_string(&media_json(&platform, &cover_url))
+                .unwrap_or_else(|_| "{}".into())
         );
         let _ = panels.send(capri_panels::Command::Eval(capri_panels::PanelId::Media, js));
     }
+}
+
+/// Состояние плеера как JSON — общее для потока опроса и для `ready`.
+fn media_json(platform: &capri_win::WindowsPlatform, cover_url: &str) -> serde_json::Value {
+    match platform.now_playing() {
+        Some(track) => serde_json::json!({
+            "title": track.title,
+            "artist": track.artist,
+            "app": track.app,
+            "playing": track.playing,
+            "position": track.position,
+            "duration": track.duration,
+            "cover": cover_url,
+        }),
+        // Плеер молчит: страница покажет «Ничего не играет».
+        None => serde_json::json!({
+            "title": "",
+            "artist": "",
+            "app": "",
+            "playing": false,
+            "position": 0.0,
+            "duration": 0.0,
+            "cover": "",
+        }),
+    }
+}
+
+/// Состояние плеера одной строкой JS — для страницы медиа.
+///
+/// Нужна обработчику `ready`: поток опроса присылает трек раз в полсекунды,
+/// и до первого кадра страница показывала пустой виджет с нерабочими
+/// кнопками. Своего плеера здесь не создаём — платформа приходит снаружи:
+/// `WindowsPlatform::new` с пустым каталогом не находит сессию SMTC.
+fn media_state_js(platform: &capri_win::WindowsPlatform) -> String {
+    let cover_url = capri_win::media::cover_data_url().unwrap_or_default();
+    format!(
+        "window.capri.setState({{ media: {} }});",
+        serde_json::to_string(&media_json(platform, &cover_url)).unwrap_or_else(|_| "{}".into())
+    )
 }
 
 /// Крошечное состояние «какие панели открыты» для фоновых потоков.
