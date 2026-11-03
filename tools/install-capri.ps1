@@ -33,6 +33,41 @@ if (Test-Path $assets) {
     Copy-Item $assets (Join-Path $target "assets") -Recurse -Force
 }
 
+# Модель распознавания речи. Без неё Капри при каждом запуске говорила «я тебя
+# не слышу», и человек шёл проверять микрофон — хотя микрофон был в порядке:
+# папки models в установке просто не было. 87 МБ копируем один раз, а не при
+# каждой установке.
+$models = Join-Path $source "models"
+if (Test-Path $models) {
+    $vosk = Join-Path $models "vosk-model-small-ru-0.22"
+    $targetVosk = Join-Path $target "models\vosk-model-small-ru-0.22"
+    if ((Test-Path $vosk) -and -not (Test-Path (Join-Path $targetVosk "conf"))) {
+        Write-Output "Копирую модель распознавания речи (около 90 МБ, один раз)…"
+        New-Item -ItemType Directory -Path (Join-Path $target "models") -Force | Out-Null
+        Copy-Item $vosk $targetVosk -Recurse -Force
+    }
+    $lib = Join-Path $models "libvosk.dll"
+    if (Test-Path $lib) {
+        Copy-Item $lib (Join-Path $target "libvosk.dll") -Force
+    }
+}
+
+# libvosk.dll лежит в корне проекта, а не в models. Без неё модель открыть
+# нечем: Windows отвечает «LoadLibraryExW failed».
+#
+# Одной libvosk мало: она собрана под MinGW и тянет за собой libgcc_s_seh-1.dll,
+# libstdc++-6.dll и libwinpthread-1.dll. Пока их не было рядом, Windows
+# отказывалась грузить саму libvosk — а сообщение об этом выглядело как «нет
+# модели», и человек шёл проверять исправный микрофон. Копируем весь набор.
+foreach ($name in @("libvosk.dll", "libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll")) {
+    $from = Join-Path $source $name
+    if (Test-Path $from) {
+        Copy-Item $from (Join-Path $target $name) -Force
+    } else {
+        Write-Output "Внимание: рядом с папкой tools нет $name — Капри не будет слышать."
+    }
+}
+
 # Ярлык на рабочем столе, чтобы запускать двойным кликом, как обычную программу.
 $desktop = [Environment]::GetFolderPath("Desktop")
 $link = Join-Path $desktop "Капри.lnk"
